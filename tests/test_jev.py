@@ -1056,15 +1056,13 @@ def test_identical_clean_task_is_replayed_without_the_planner(mem):
 
 
 def test_ocr_click_chooses_a_text_and_falls_back_for_icons(monkeypatch):
-    import cursor
     import ocr
-    clicks = []
-    monkeypatch.setattr(cursor, "click", lambda x, y, button="left", count=1: clicks.append((round(x), round(y))))
     monkeypatch.setattr(ocr, "enabled", lambda: True)
     monkeypatch.setattr(ocr, "texts", lambda shot: [("Cancel", (0.1, 0.1, 0.2, 0.2)), ("Save", (0.8, 0.8, 0.9, 0.9))])
-    a, _ = _pointer_agent(monkeypatch)
-    picks = iter(["1", "none"])
+    a, done = _pointer_agent(monkeypatch)
+    picks = iter(["0", "none"])  # "Save" is ranked first: it shares a word with the target
     a.ask = lambda state, q: type("R", (), {"choices": {"t": FakeChoice(next(picks), 0.9)}})()
-    assert a.ocr_click("the Save button", b"shot") and clicks == [(950, 560)]  # centre of (0.85, 0.85) of the window
-    assert not a.ocr_click("the close icon", b"shot")                        # no text fits: the box takes over
+    shot = _jpeg((240, 240, 240))
+    assert a.ocr_click("the Save button", shot) and done == [("click", 950, 560, "left", 1)]  # centre of (0.85, 0.85)
+    assert not a.ocr_click("the close icon", shot)  # no text fits: the box takes over
     assert [t for t, _ in ocr.candidates("save it", ocr.texts(b""))][0] == "Save"
