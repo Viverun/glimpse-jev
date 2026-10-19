@@ -25,6 +25,7 @@ import memory
 import notify
 import sessions
 import takeover
+import voice
 
 # name -> (argument hint, help). The order is the order /help shows them.
 COMMANDS: dict[str, tuple[str, str]] = {
@@ -59,6 +60,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "block": ("<word>", "ignore windows whose title contains this"),
     "setup": ("", "connect the planner and Jev: endpoints, keys, models"),
     "glow": ("on|off", "the grey glow around the screen while glimpse works"),
+    "voice": ("", "switch between typing and speaking your tasks (also ctrl+space or F2)"),
     "doctor": ("", "check that everything jev needs is working"),
     "clear": ("", "start a fresh session and clear the screen (the old one stays in /resume)"),
     "exit": ("", "leave jev (also /quit, Ctrl+D)"),
@@ -95,13 +97,19 @@ class SlashCompleter(Completer):
                 yield Completion(name, start_position=-len(text) + 1, display=f"/{name} {hint}".rstrip(), display_meta=help_)
 
 
-def key_bindings() -> KeyBindings:
+def key_bindings(repl=None) -> KeyBindings:
     kb = KeyBindings()
 
     @kb.add("escape", "enter")
     @kb.add("c-j")
     def _(event):  # newline without sending
         event.current_buffer.insert_text("\n")
+
+    if repl is not None:
+        @kb.add("c-space")
+        @kb.add("f2")
+        def _(event):  # chat <-> voice
+            repl.toggle_voice(event.app)
 
     return kb
 
@@ -113,21 +121,23 @@ class Repl:
         self.session = sessions.new()
         self.last: tuple[str, dict] | None = None  # prompt, result of the latest task
         self.quiet = args.quiet
+        self.voice_on, self.vstate, self.vlevel, self.tick, self.listener, self.warmed = False, "", 0.0, 0, None, False
         self.style = Style.from_dict({"prompt": f"bold {accent}", "bottom-toolbar": "noreverse #5c616a", "bottom-toolbar.text": "noreverse #5c616a",
                                       "completion-menu.completion": "bg:#24262b #b8bcc4", "completion-menu.completion.current": "bg:#3a3d44 #ffffff",
                                       "completion-menu.meta.completion": "bg:#24262b #6f747d", "completion-menu.meta.completion.current": "bg:#3a3d44 #d4d7dd",
-                                      "auto-suggestion": "#4a4e56"})
+                                      "auto-suggestion": "#4a4e56", "voice": "#d49a92"})
         hist = memory.DIR / "history"
         hist.parent.mkdir(parents=True, exist_ok=True)
         self.prompt = PromptSession(history=FileHistory(str(hist)), auto_suggest=AutoSuggestFromHistory(), completer=SlashCompleter(),
-                                    complete_while_typing=True, key_bindings=key_bindings(), style=self.style,
+                                    complete_while_typing=True, key_bindings=key_bindings(self), style=self.style,
                                     bottom_toolbar=self.toolbar, mouse_support=False, enable_history_search=False)
 
     # --- the loop ------------------------------------------------------------------------------
     def toolbar(self):
         title = self.session["title"] or "new session"
         stale = "   ·   updated: restart glimpse" if self.stale() else ""
-        return f"  ◐ {title}   ·   context {context.fill(self.session):.0%}   ·   {takeover.stop_combo()} stops   ·   /help{stale}"
+        mode = "voice: speak, Enter runs" if self.voice_on else "ctrl+space voice"
+        return f"  ◐ {title}   ·   context {context.fill(self.session):.0%}   ·   {mode}   ·   {takeover.stop_combo()} stops   ·   /help{stale}"
 
     def stale(self) -> bool:
         """True once jev's source on disk is newer than the code this process loaded."""
@@ -136,11 +146,90 @@ class Repl:
         except OSError:
             return False
 
+    # --- voice mode ----------------------------------------------------------------------------
+    def message(self):
+        self.tick += 1
+        if not self.voice_on:
+            return [("class:prompt", "› ")]
+        if self.vstate == "ready":
+            return [("class:voice", "🎙 ✓ "), ("class:prompt", "› ")]
+        return [("class:voice", voice.indicator(self.vstate or "listening", self.vlevel, self.tick) + " "), ("class:prompt", "› ")]
+
+    def toggle_voice(self, app=None) -> None:
+        missing = voice.available()
+        if missing and not self.voice_on:
+            msg = lambda: self.console.print(f"[dim]voice is unavailable: {missing}[/]")  # noqa: E731
+            if app:
+                from prompt_toolkit.application import run_in_terminal
+                run_in_terminal(msg)
+            else:
+                msg()
+            return
+        self.voice_on = not self.voice_on
+        self.voice_glow(self.voice_on)
+        if self.voice_on:
+            if not self.warmed:
+                voice.warm()
+                self.warmed = True
+            if app:  # from the prompt: listen now; from /voice: the next prompt starts listening
+                self.listen(app)
+        else:
+            self.stop_listening()
+        if app:
+            app.invalidate()
+
+    def voice_glow(self, on: bool) -> None:
+        """The green screen border while voice mode is on (between tasks; a running task's glow turns green too)."""
+        import glow
+        voice.set_mode(on)
+        if on and not getattr(self, "vglow", None) and config.get("glow", True):
+            self.vglow = glow.start(cursor_theme=False)
+        elif not on:
+            glow.stop(getattr(self, "vglow", None))
+            self.vglow = None
+
+    def listen(self, app=None) -> None:
+        """Start one phrase; the transcript lands in the prompt for you to check, then Enter runs it."""
+        self.stop_listening()
+        app = app or self.prompt.app
+
+        def state(st, level=0.0):
+            self.vstate, self.vlevel = st, level
+            app.invalidate()
+
+        def text(t):
+            def put():
+                if not self.voice_on:
+                    return
+                if t and voice.intent(t) == "chat":  # "chat mode", "switch to typing", "stop listening"
+                    self.voice_on = False
+                    self.voice_glow(False)
+                    self.stop_listening()
+                elif t:
+                    buf = app.current_buffer
+                    buf.text = (buf.text + " " + t).strip() if buf.text else t
+                    buf.cursor_position = len(buf.text)
+                    self.vstate = "ready"
+                else:
+                    self.listen(app)  # heard nothing: keep listening
+                app.invalidate()
+            app.loop.call_soon_threadsafe(put)
+        self.vstate = "listening"
+        self.listener = voice.Listener(text, state).start()
+
+    def stop_listening(self) -> None:
+        if self.listener:
+            self.listener.cancel()
+            self.listener = None
+        self.vstate = ""
+
     def loop(self) -> None:
         interrupted = False
         while True:
             try:
-                text = self.prompt.prompt([("class:prompt", "› ")]).strip()
+                text = self.prompt.prompt(self.message, refresh_interval=0.1,
+                                          pre_run=lambda: self.voice_on and self.listen()).strip()
+                self.stop_listening()
                 interrupted = False
             except KeyboardInterrupt:
                 if interrupted:
@@ -157,6 +246,8 @@ class Repl:
                     break
             except SystemExit:
                 pass  # a refused or cancelled task returns to the prompt
+        if self.voice_on:
+            self.voice_glow(False)
         self.console.print("[dim]bye[/]")
 
     def handle(self, text: str) -> str | None:
@@ -181,7 +272,18 @@ class Repl:
     def task(self, prompt: str) -> None:
         self.auto_compact()  # never start a task on a full window
         self.args.prompt = prompt
-        out = self.run_task(self.args, self.session)
+        self.args.voice = self.voice_on  # keep listening while the task runs: "stop", "continue", or more steps
+        if self.voice_on:  # the task's own glow takes over (green, since voice mode is on)
+            import glow
+            glow.stop(getattr(self, "vglow", None))
+            self.vglow = None
+        try:
+            out = self.run_task(self.args, self.session)
+        finally:
+            if self.voice_on and not os.path.exists(voice.VOICE_FILE):  # "chat mode" was said during the task
+                self.voice_on = False
+            if self.voice_on:
+                self.voice_glow(True)
         if out:
             result, secs = out
             context.note_usage(self.session, result.pop("prompt_tokens", 0))
@@ -493,6 +595,10 @@ class Repl:
             rows.append((c["category"], f"{c['done']}/{c['runs']} done  ·  learnability {c['learnability']}/100{trend}"
                                         + (f"  [#5c616a]{', '.join(c['apps'][:3])}[/]" if c["apps"] else "")))
         self.table("glimpse learning", rows, "nothing learned yet: finish a task first")
+
+    def cmd_voice(self, rest):
+        self.toggle_voice()
+        self.console.print(f"voice mode: {'on — speak, check the text, press Enter (ctrl+space for typing)' if self.voice_on else 'off'}")
 
     def cmd_glow(self, rest):
         if rest in ("on", "off"):

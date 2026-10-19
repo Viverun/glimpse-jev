@@ -21,6 +21,7 @@ ACCENTS = {"jev": (0.49, 0.36, 1.0), "working": (0.38, 0.65, 1.0), "done": (0.30
            "stopped": (1.0, 0.42, 0.42), "info": (0.49, 0.36, 1.0)}
 GLYPHS = {"working": "●", "done": "✔", "stopped": "■", "jev": "◆", "info": "◆"}
 WIDTH, MARGIN, GAP, PAD, BORDER = 360, 24, 10, 16, 3
+AREA = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "glimpse-toast-area")
 MAX_MS = 2650  # on screen at most ~3 s in total: 200 ms fade-in + this + 350 ms fade-out
 FONT = "JetBrainsMono Nerd Font, JetBrains Mono"
 
@@ -131,12 +132,20 @@ def daemon() -> None:
         for c in cards:  # top-right corner: newest on top, older ones pushed down
             c.move(geo.x + geo.width - WIDTH - MARGIN, y)
             y += c.card_h + GAP
+        # where the cards are and until when: fast screenshots (frames.py) avoid that area while they show
+        until = max((c.born + (c.ms + 400) / 1000 for c in cards), default=0) - time.monotonic() + time.time()
+        try:
+            with open(AREA, "w") as f:
+                f.write(f"{geo.x + geo.width - WIDTH - MARGIN} {geo.y} {WIDTH + MARGIN} {y - geo.y} {until:.2f}")
+        except OSError:
+            pass
 
     def add(msg):
         c = Card(msg.get("title", ""), msg.get("body", ""), msg.get("state", "jev"))
         c.ms = min(int(msg.get("ms", MAX_MS)), MAX_MS)
         cards.insert(0, c)
         c.show_all()
+        c.input_shape_combine_region(cairo.Region())  # again once mapped: XWayland ignores the one set at realize
         place()
         # keep them stacked: show() may reposition after the window maps
         GLib.timeout_add(60, lambda: place() or False)

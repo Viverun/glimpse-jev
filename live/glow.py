@@ -17,6 +17,9 @@ import time
 DEPTH = 34          # glow depth in logical pixels
 COLOR = (0.78, 0.80, 0.84)  # cool grey: glimpse is working
 PAUSED = (0.92, 0.38, 0.38)  # soft red: glimpse is paused because you are using the computer
+VOICE = (0.30, 0.86, 0.52)  # green: voice mode, glimpse is listening
+VOICE_INNER = (0.20, 0.70, 0.75)  # the green fades into teal
+VOICE_FILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "glimpse-voice")
 STATE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "glimpse-paused-until")
 
 
@@ -40,12 +43,16 @@ BREATH = 3.2        # seconds per breath
 LOW, HIGH = 0.55, 1.0  # opacity range of a breath
 
 
-def start() -> subprocess.Popen | None:
+def voice_now() -> bool:
+    return os.path.exists(VOICE_FILE)
+
+
+def start(cursor_theme: bool = True) -> subprocess.Popen | None:
     """Show the glow until stop(). None if it cannot be shown (no XWayland display, GLIMPSE_NO_GLOW set...)."""
     if os.environ.get("GLIMPSE_NO_GLOW") or not os.environ.get("DISPLAY"):
         return None
     restore = ""
-    if not os.environ.get("GLIMPSE_NO_CURSOR"):
+    if cursor_theme and not os.environ.get("GLIMPSE_NO_CURSOR"):
         try:  # glimpse's own cursor while it works; the daemon puts yours back when the glow ends
             import cursor
             restore = cursor.current_theme()
@@ -53,8 +60,13 @@ def start() -> subprocess.Popen | None:
         except Exception:
             restore = ""
     try:
+        try:  # fast screenshots come from the screencast, which sees the glow: keep it steady, not breathing
+            import frames
+            steady = frames.enabled()
+        except Exception:
+            steady = False
         return subprocess.Popen(["/usr/bin/python3", __file__, "--daemon", str(os.getpid()), restore],
-                                env={**os.environ, "GDK_BACKEND": "x11"}, stdin=subprocess.DEVNULL,
+                                env={**os.environ, "GDK_BACKEND": "x11", **({"GLIMPSE_GLOW_STEADY": "1"} if steady else {})}, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError:
         return None
@@ -79,11 +91,12 @@ def daemon(parent: int, restore_cursor: str = "") -> None:
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
-        r, g, b = PAUSED if paused[0] else COLOR
+        r, g, b = PAUSED if paused[0] else VOICE if voiced[0] else COLOR
+        r2, g2, b2 = VOICE_INNER if voiced[0] and not paused[0] else (r, g, b)
         for x0, y0, x1, y1 in ((0, 0, 0, DEPTH), (0, h, 0, h - DEPTH), (0, 0, DEPTH, 0), (w, 0, w - DEPTH, 0)):
             grad = cairo.LinearGradient(x0, y0, x1, y1)
             grad.add_color_stop_rgba(0.0, r, g, b, PEAK)
-            grad.add_color_stop_rgba(0.35, r, g, b, PEAK * 0.45)
+            grad.add_color_stop_rgba(0.35, r2, g2, b2, PEAK * 0.45)
             grad.add_color_stop_rgba(1.0, r, g, b, 0.0)
             cr.set_source(grad)
             if y0 == y1:  # left or right edge
@@ -97,7 +110,8 @@ def daemon(parent: int, restore_cursor: str = "") -> None:
         cr.stroke()
         return False
 
-    wins, paused = [], [False]
+    wins, paused, voiced = [], [False], [voice_now()]
+    steady = bool(os.environ.get("GLIMPSE_GLOW_STEADY"))
     disp = Gdk.Display.get_default()
     for i in range(disp.get_n_monitors()):
         geo = disp.get_monitor(i).get_geometry()
@@ -115,21 +129,23 @@ def daemon(parent: int, restore_cursor: str = "") -> None:
         win.connect("realize", lambda w: w.get_window().input_shape_combine_region(cairo.Region(), 0, 0))
         win.set_opacity(0.0)
         win.show_all()
+        # clicks pass through: set the empty input shape again once mapped (XWayland ignores the one set at realize)
+        win.input_shape_combine_region(cairo.Region())
         wins.append(win)
 
     born, ending = time.monotonic(), [None]
 
     def watch_pause():
-        now = paused_now()
-        if now != paused[0]:
-            paused[0] = now
+        now, v = paused_now(), voice_now()
+        if now != paused[0] or v != voiced[0]:
+            paused[0], voiced[0] = now, v
             for w in wins:
                 w.queue_draw()  # repaint in red (paused) or grey (working)
         return True
 
     def tick():
         now = time.monotonic()
-        breath = LOW + (HIGH - LOW) * (0.5 - 0.5 * math.cos(2 * math.pi * (now - born) / BREATH))
+        breath = HIGH * 0.8 if steady else LOW + (HIGH - LOW) * (0.5 - 0.5 * math.cos(2 * math.pi * (now - born) / BREATH))
         level = min(1.0, (now - born) / 0.5) * breath  # 0.5 s fade-in
         if ending[0] is not None:
             left = 1 - (now - ending[0]) / 0.4

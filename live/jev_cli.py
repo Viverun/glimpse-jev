@@ -357,7 +357,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
     view = Working(rows, time.monotonic())
     with flat_pointer(), Takeover() as you, Live(view, console=console, refresh_per_second=12, transient=False) as live:
         view.you = agent.you = you
-        listener = Instructions(agent, you, live.console)
+        listener = Instructions(agent, you, live.console, voice_on=bool(getattr(args, "voice", False)))
         def on_step(info):
             if info.get("kind") == "update":  # full text, kept above the live table as a log of Claude's turns
                 live.console.print(Text.assemble(("● ", f"bold {GOOD}"), (info["label"].split(" · ", 1)[0][2:] + "  ", f"bold {GOOD}"),
@@ -426,7 +426,8 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
     signal.alarm(0)
     glow.stop(halo)
     secs = time.perf_counter() - t0
-    bring_back(desktop, own)
+    if result.get("show") != "app":  # the planner decides: leave the opened site or app in front when it is the result
+        bring_back(desktop, own)
     desktop.mcp.close()
     time.sleep(0.5)  # the portal can finish writing a screenshot just after the call returned
     clean_portal_screenshots(since=wall_start - 1)
@@ -463,11 +464,51 @@ class Instructions:
     """While a task runs, read lines typed in glimpse's terminal: `continue` resumes after a pause, `stop` stops,
     and any other text becomes an extra instruction the planner follows from its next round."""
 
-    def __init__(self, agent, you, out):
+    def __init__(self, agent, you, out, voice_on: bool = False):
         import threading
         self.agent, self.you, self.out, self.done = agent, you, out, threading.Event()
+        self.mic = None
         if sys.stdin.isatty():
             threading.Thread(target=self.read, daemon=True).start()
+        if voice_on:  # voice mode: the same, spoken
+            threading.Thread(target=self.hear, daemon=True).start()
+
+    def hear(self) -> None:
+        """Keep listening while the task runs: "stop" stops it, "continue" resumes a pause, "chat mode" stops
+        listening, and anything else is an extra instruction from the next round."""
+        import threading
+
+        import voice
+        while not self.done.is_set():
+            got, ready = [], threading.Event()
+            self.mic = voice.Listener(lambda t: (got.append(t), ready.set())).start()
+            while not ready.wait(0.2):
+                if self.done.is_set():
+                    self.mic.cancel()
+                    return
+            text = (got[0] if got else "").strip()
+            if not text or self.done.is_set():
+                continue
+            self.handle(text, voice.intent(text), spoken=True)
+            if voice.intent(text) == "chat":
+                return
+
+    def handle(self, line: str, intent: str = "", spoken: bool = False) -> None:
+        said = ("  🎙 ", "#7fd8a0") if spoken else ("  ▸ ", GOOD)
+        if intent == "continue":
+            self.you.resume()
+            self.out.print(Text.assemble(said, ("continuing", MUTED)))
+        elif intent == "stop":
+            self.out.print(Text.assemble(said, ("stopping", MUTED)))
+            os.kill(os.getpid(), __import__("signal").SIGINT)
+        elif intent == "chat":
+            import voice
+            voice.set_mode(False)
+            self.out.print(Text.assemble(said, ("voice off for this task", MUTED)))
+        else:
+            self.agent.extra.append(line)
+            self.you.resume()
+            self.out.print(Text.assemble((said[0].replace("▸", "+"), said[1]), ("added: ", MUTED), (line, ACCENT)))
 
     def read(self) -> None:
         import select
@@ -478,18 +519,13 @@ class Instructions:
             if self.done.is_set() or not line:
                 continue
             low = line.lower().rstrip(".!")
-            if low in ("continue", "c", "go", "resume", "go on"):
-                self.you.resume()
-                self.out.print(Text.assemble(("  ▸ ", GOOD), ("continuing", MUTED)))
-            elif low in ("stop", "cancel", "abort"):
-                os.kill(os.getpid(), __import__("signal").SIGINT)
-            else:
-                self.agent.extra.append(line)
-                self.you.resume()
-                self.out.print(Text.assemble(("  + ", GOOD), ("added: ", MUTED), (line, ACCENT)))
+            self.handle(line, "continue" if low in ("continue", "c", "go", "resume", "go on") else
+                        "stop" if low in ("stop", "cancel", "abort") else "")
 
     def stop(self) -> None:
         self.done.set()
+        if self.mic:
+            self.mic.cancel()
 
 
 def learning_line(rep: dict) -> Text:

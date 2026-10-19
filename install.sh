@@ -20,10 +20,10 @@ esac
 
 # --- 1. system packages ------------------------------------------------------------------------
 if [ -z "${GLIMPSE_SKIP_SYSTEM:-}" ]; then
-  if   command -v apt-get >/dev/null; then PM="apt";    PKGS="git curl ydotool libgtk-3-bin python3-gi gir1.2-gtk-3.0 nodejs npm"
-  elif command -v dnf     >/dev/null; then PM="dnf";    PKGS="git curl ydotool gtk3 python3-gobject nodejs npm"
-  elif command -v pacman  >/dev/null; then PM="pacman"; PKGS="git curl ydotool gtk3 python-gobject nodejs npm"
-  elif command -v zypper  >/dev/null; then PM="zypper"; PKGS="git curl ydotool gtk3-tools python3-gobject-Gdk nodejs npm"
+  if   command -v apt-get >/dev/null; then PM="apt";    PKGS="git curl ydotool libgtk-3-bin python3-gi gir1.2-gtk-3.0 nodejs npm alsa-utils gstreamer1.0-pipewire gir1.2-gstreamer-1.0 python3-dbus python3-numpy"
+  elif command -v dnf     >/dev/null; then PM="dnf";    PKGS="git curl ydotool gtk3 python3-gobject nodejs npm alsa-utils pipewire-gstreamer python3-dbus python3-numpy"
+  elif command -v pacman  >/dev/null; then PM="pacman"; PKGS="git curl ydotool gtk3 python-gobject nodejs npm alsa-utils gst-plugin-pipewire python-dbus python-numpy"
+  elif command -v zypper  >/dev/null; then PM="zypper"; PKGS="git curl ydotool gtk3-tools python3-gobject-Gdk nodejs npm alsa-utils gstreamer-plugin-pipewire python3-dbus-python python3-numpy"
   else PM=""; fi
 
   if [ -n "$PM" ]; then
@@ -60,7 +60,7 @@ if [ -z "${GLIMPSE_SKIP_SYSTEM:-}" ]; then
   # --- 3. the ydotool daemon, as a user service ------------------------------------------------
   if command -v ydotoold >/dev/null && command -v systemctl >/dev/null; then
     mkdir -p "$HOME/.config/systemd/user"
-    if [ ! -f "$HOME/.config/systemd/user/ydotoold.service" ]; then
+    if ! grep -q ExecStartPre "$HOME/.config/systemd/user/ydotoold.service" 2>/dev/null; then
       cat > "$HOME/.config/systemd/user/ydotoold.service" <<UNIT
 [Unit]
 Description=ydotool daemon (input for glimpse)
@@ -68,6 +68,8 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
+# a leftover ydotoold holding the socket makes every restart fail, and clicks stop working
+ExecStartPre=-/usr/bin/pkill -u %U -x ydotoold
 ExecStart=$(command -v ydotoold)
 Restart=on-failure
 RestartSec=2

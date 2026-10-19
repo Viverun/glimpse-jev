@@ -27,6 +27,7 @@ PAIR = re.compile(r"\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
 class OSWorldServer:
     def __init__(self, url: str):
         self.url = url.rstrip("/")
+        self._at: tuple[float, str] | None = None  # the last tree, reused for 1 s (one observe reads it several times)
 
     def screenshot(self) -> bytes:
         r = requests.get(self.url + "/screenshot", timeout=20)
@@ -34,20 +35,59 @@ class OSWorldServer:
         return r.content
 
     def accessibility(self) -> str:
-        r = requests.get(self.url + "/accessibility", timeout=30)
+        if self._at and time.monotonic() - self._at[0] < 1.0:
+            return self._at[1]
+        for i in range(4):  # the server answers 500 while the desktop is still starting after a reset
+            r = requests.get(self.url + "/accessibility", timeout=30)
+            if r.ok or i == 3:
+                break
+            time.sleep(1.5)
         r.raise_for_status()
-        return r.json().get("AT", "")
+        self._at = (time.monotonic(), r.json().get("AT", ""))
+        return self._at[1]
+
+    def apps(self) -> dict[str, str]:
+        """Installed apps in the VM, {lowercase name: desktop id}, for glimpse's open step."""
+        out, _ = self.bash("for f in /usr/share/applications/*.desktop; do n=$(grep -m1 '^Name=' \"$f\" | cut -d= -f2-); "
+                           "echo \"$n|$(basename \"$f\")\"; done", timeout=20)
+        apps = dict(UBUNTU_APPS)  # the stock Ubuntu image, in case the listing comes back empty
+        if "|" not in out:
+            print(f"  VM app listing empty: {out[:200]!r}", flush=True)
+        for line in out.splitlines():
+            n, _, d = line.rpartition("|")
+            if n and d.endswith(".desktop"):
+                apps.setdefault(n.strip().lower(), d)
+        return apps
 
     def pyautogui(self, code: str) -> None:
+        self._at = None
         cmd = ["python3", "-c", "import pyautogui, time; pyautogui.FAILSAFE = False; " + code]
         requests.post(self.url + "/execute", headers={"Content-Type": "application/json"},
                       data=json.dumps({"command": cmd, "shell": False}), timeout=60)
 
-    def bash(self, script: str, timeout: int = 60) -> tuple[str, int]:
-        r = requests.post(self.url + "/run_bash_script", headers={"Content-Type": "application/json"},
-                          data=json.dumps({"script": script, "timeout": timeout}), timeout=timeout + 10)
-        d = r.json() if r.ok else {}
-        return (d.get("output") or "") + (d.get("error") or ""), int(d.get("returncode", 1 if not r.ok else 0))
+    def bash(self, script: str, timeout: int = 60, keep_tree: bool = False) -> tuple[str, int]:
+        if not keep_tree:  # a command may change the screen; a read-only query (wmctrl) keeps the cached tree
+            self._at = None
+        # /execute, not /run_bash_script: that endpoint fails in the published VM image ("_append_event is not defined")
+        cmd = ["timeout", str(int(timeout)), "bash", "-c", "exec 2>&1\n" + script]
+        try:
+            r = requests.post(self.url + "/execute", headers={"Content-Type": "application/json"},
+                              data=json.dumps({"command": cmd, "shell": False}), timeout=timeout + 15)
+            d = r.json()
+        except (requests.RequestException, ValueError) as e:
+            return f"(the VM did not answer: {e!s:.120})", 1
+        rc = d.get("returncode")
+        return (d.get("output") or "") + (d.get("error") or ""), int(rc if rc is not None else (0 if r.ok else 1))
+
+
+UBUNTU_APPS = {
+    "terminal": "org.gnome.Terminal.desktop", "files": "org.gnome.Nautilus.desktop",
+    "text editor": "org.gnome.TextEditor.desktop", "gedit": "org.gnome.gedit.desktop",
+    "settings": "gnome-control-center.desktop", "google chrome": "google-chrome.desktop", "chrome": "google-chrome.desktop",
+    "libreoffice calc": "libreoffice-calc.desktop", "libreoffice writer": "libreoffice-writer.desktop",
+    "libreoffice impress": "libreoffice-impress.desktop", "gimp": "gimp.desktop", "vlc": "vlc.desktop",
+    "thunderbird": "thunderbird.desktop", "visual studio code": "code.desktop",
+}
 
 
 def parse_tree(xml: str) -> list[dict]:
@@ -78,8 +118,17 @@ def parse_tree(xml: str) -> list[dict]:
     return out
 
 
-def _wid(app: str, title: str) -> int:
-    return int(hashlib.sha1(f"{app}|{title}".encode()).hexdigest()[:8], 16)
+def _wid(title: str) -> int:
+    """A window id both sources agree on: the X window list (wmctrl) and the accessibility tree name it by title."""
+    return int(hashlib.sha1(title.encode()).hexdigest()[:8], 16)
+
+
+# The VM's windows: names from wmctrl, true positions from xwininfo, the focused one from the root window.
+WM_LIST = r"""wmctrl -lpx | while read -r id desk pid cls host title; do
+  g=$(xwininfo -id "$id" 2>/dev/null | awk '/Absolute upper-left X/{x=$4} /Absolute upper-left Y/{y=$4} /Width:/{w=$2} /Height:/{h=$2} END{print x, y, w, h}')
+  echo "$id $desk $pid $g $cls $host $title"
+done
+echo ACTIVE $(xprop -root _NET_ACTIVE_WINDOW | awk '{print $NF}')"""
 
 
 class OSWorldMCP:
@@ -87,6 +136,7 @@ class OSWorldMCP:
 
     def __init__(self, server: OSWorldServer):
         self.s = server
+        self._titles: dict[int, str] = {}  # window id -> X title, from the last wmctrl list
         self._nodes: list[dict] = []  # the latest tree read (perform_action / set_value use its indexes)
 
     def _frames(self, nodes: list[dict]) -> list[tuple[dict, dict]]:
@@ -104,9 +154,9 @@ class OSWorldMCP:
         wins = []
         for app, f in self._frames(nodes):
             title = f.get("name") or app.get("name") or ""
-            wins.append({"window_id": _wid(app.get("name") or "", title), "title": title,
+            wins.append({"window_id": _wid(title), "title": title,
                          "app_id": f"{(app.get('name') or '').lower()}.desktop", "wm_class": app.get("name"),
-                         "pid": _wid(app.get("name") or "", ""), "focused": "active" in f["states"], "bounds": dict(f["bounds"])})
+                         "pid": _wid(app.get("name") or ""), "focused": "active" in f["states"], "bounds": dict(f["bounds"])})
         if wins and not any(w["focused"] for w in wins):
             wins[-1]["focused"] = True
         return wins
@@ -121,16 +171,54 @@ class OSWorldMCP:
                             "parent_index": idx.get(n["parent_index"]), "_orig": n["index"]})
         return out
 
+    def _wm_windows(self) -> list[dict]:
+        """The window list from wmctrl in the VM: ~10 ms, where the accessibility tree takes 3-4 s."""
+        try:
+            out, rc = self.s.bash(WM_LIST, timeout=10, keep_tree=True)
+        except Exception:
+            return []
+        if rc != 0 or "ACTIVE" not in out:
+            return []
+        active = re.search(r"ACTIVE (0x[0-9a-fA-F]+)", out)
+        active = int(active.group(1), 16) if active else -1
+        wins = []
+        for line in out.splitlines():
+            # id desktop pid x y width height class host title (positions from xwininfo: wmctrl -G doubles the frame offset)
+            p = line.split(None, 9)
+            if len(p) < 9 or not p[0].startswith("0x") or p[1] == "-1":  # -1: panels and the desktop itself
+                continue
+            title = p[9].strip() if len(p) > 9 else ""
+            w, h = int(p[5]), int(p[6])
+            if not title or title == "Desktop" or w <= 1 or h <= 1:
+                continue
+            cls = p[7].split(".")[0]
+            wins.append({"window_id": _wid(title), "title": title, "app_id": f"{cls.lower()}.desktop", "wm_class": cls,
+                         "pid": int(p[2]), "focused": int(p[0], 16) == active,
+                         "bounds": {"x": int(p[3]), "y": int(p[4]), "width": w, "height": h}})
+        if wins and not any(x["focused"] for x in wins):
+            wins[-1]["focused"] = True
+        self._titles = {x["window_id"]: x["title"] for x in wins}
+        return wins
+
     def call(self, tool: str, **a) -> dict:
         if tool == "list_windows":
-            return {"windows": self._windows(parse_tree(self.s.accessibility()))}
+            return {"windows": self._wm_windows() or self._windows(parse_tree(self.s.accessibility()))}
         if tool == "get_app_state":
             nodes = parse_tree(self.s.accessibility())
             wins = self._windows(nodes)
             target = next((w for w in wins if w["window_id"] == a.get("window_id")), None) or next((w for w in wins if w["focused"]), None)
-            frame = next((f for app, f in self._frames(nodes) if target and _wid(app.get("name") or "", f.get("name") or app.get("name") or "") == target["window_id"]), None)
+            frames = self._frames(nodes)
+            frame = next((f for app, f in frames if target and _wid(f.get("name") or app.get("name") or "") == target["window_id"]), None)
+            wanted = self._titles.get(a.get("window_id"), "")
+            if wanted and (not target or target["window_id"] != a.get("window_id")):
+                # the X title and the accessible frame name can differ slightly: match by containment
+                hit = next(((app, f) for app, f in frames if (f.get("name") or "") and ((f.get("name") or "") in wanted or wanted in (f.get("name") or ""))), None)
+                if hit:
+                    frame = hit[1]
+                    target = next((w for w in wins if w["window_id"] == _wid(frame.get("name") or "")), target)
             tree = self._subtree(nodes, frame)[: a.get("max_nodes") or 600] if frame else []
-            self._nodes = tree
+            if (a.get("max_nodes") or 600) > 1:  # a screenshot-only read (max_nodes=1) keeps the indexes of the last real read
+                self._nodes = tree
             out = {"accessibility_tree": tree}
             if a.get("include_screenshot", True) and target:
                 from PIL import Image
@@ -149,7 +237,7 @@ class OSWorldMCP:
         if tool == "screenshot":
             return {"_images": [base64.b64encode(self.s.screenshot()).decode()]}
         if tool == "activate_window":
-            w = next((w for w in self._windows(parse_tree(self.s.accessibility())) if w["window_id"] == a.get("window_id")), None)
+            w = next((w for w in self.call("list_windows")["windows"] if w["window_id"] == a.get("window_id")), None)
             if w:
                 title = w["title"].replace("'", "'\\''")
                 out, rc = self.s.bash(f"wmctrl -a '{title}' 2>/dev/null || xdotool search --name '{title}' windowactivate 2>/dev/null")
@@ -264,7 +352,7 @@ def make_desktop(url: str):
 
         def launch(self, cmd: list[str], env: dict | None = None) -> None:
             import shlex
-            server.bash(f"nohup {' '.join(shlex.quote(c) for c in cmd)} >/dev/null 2>&1 &", timeout=10)
+            server.bash(f"DISPLAY=${{DISPLAY:-:0}} nohup {' '.join(shlex.quote(c) for c in cmd)} >/dev/null 2>&1 &", timeout=10)
 
         def shell(self, cmd: str, timeout: float = 60) -> tuple[str, int]:
             return server.bash(cmd, int(timeout))

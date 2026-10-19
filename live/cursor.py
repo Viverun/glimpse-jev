@@ -38,6 +38,7 @@ def _last() -> tuple[float, float] | None:
 
 def glide(x: float, y: float, speed: float = 2600.0) -> None:
     """Move the pointer to (x, y) smoothly: ease-in-out, a gentle arc, 0.12-0.45 s depending on the distance."""
+    x, y = float(x), float(y)  # numpy coordinates (OCR, Jev boxes) would break the JSON pointer state
     start = _last()
     if os.environ.get("GLIMPSE_NO_GLIDE") or start is None:
         _move(x, y)
@@ -75,21 +76,33 @@ BUTTONS = {"left": "0xC0", "right": "0xC1"}
 def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
     """Glide to (x, y), pause briefly like a hand settling on the target, and click with the real pointer
     (ydotool: a real input device, so every app accepts it)."""
+    x, y = float(x), float(y)  # numpy coordinates (OCR, Jev boxes) would break the JSON pointer state
     glide(x, y)
     time.sleep(random.uniform(0.05, 0.09))
     for i in range(count):
         subprocess.run(["ydotool", "click", BUTTONS[button]], env=ENV, capture_output=True)
+        _mark()
         if i + 1 < count:
             time.sleep(0.06)
 
 
+def _mark() -> None:
+    try:
+        import frames
+        frames.mark_action()  # the next fast screenshot waits for a frame from after this input
+    except Exception:
+        pass
+
+
 def _button(code: str) -> None:
     subprocess.run(["ydotool", "click", code], env=ENV, capture_output=True)
+    _mark()
 
 
 def stroke(points: list[tuple[float, float]], step: float = 4.0) -> None:
     """Press the left button at the first point, move through all the points (every `step` px, so apps that
     sample the pointer see a continuous line), and release at the last: a drawn line or a drag."""
+    points = [(float(x), float(y)) for x, y in points]
     if not points:
         return
     glide(*points[0])
@@ -119,6 +132,7 @@ def scroll(clicks: int, at: tuple[float, float] | None = None) -> None:
     for _ in range(abs(clicks)):
         subprocess.run(["ydotool", "mousemove", "-w", "-x", "0", "-y", "1" if clicks > 0 else "-1"], env=ENV, capture_output=True)
         time.sleep(0.03)
+    _mark()
 
 
 # --- glimpse's cursor theme ----------------------------------------------------------------------

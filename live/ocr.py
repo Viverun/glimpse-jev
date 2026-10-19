@@ -54,7 +54,9 @@ def texts(shot: bytes) -> list[tuple[str, tuple[float, float, float, float]]]:
         if float(score) < 0.6 or not str(txt).strip():
             continue
         xs, ys = [p[0] for p in box], [p[1] for p in box]
-        out.append((str(txt).strip(), (min(xs) / img.width, min(ys) / img.height, max(xs) / img.width, max(ys) / img.height)))
+        # plain Python floats: numpy values crash anything that writes JSON (the pointer state, MCP calls)
+        out.append((str(txt).strip(), (float(min(xs)) / img.width, float(min(ys)) / img.height,
+                                       float(max(xs)) / img.width, float(max(ys)) / img.height)))
     _cache[key] = out
     while len(_cache) > 8:
         _cache.popitem(last=False)

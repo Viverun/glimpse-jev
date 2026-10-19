@@ -20,6 +20,8 @@ from typesafe_sdk import Box, Choice, Image, Noul
 import browsers
 import changes
 import memory
+import procs
+import shell_guide
 from a11y_agent import STOP_FILE, describe
 from agent_output import read_reply
 from jev_agent import ACTIONABLE, BlockedApp, JevAgent, UserPaused
@@ -45,6 +47,9 @@ Reply with JSON only:
  "verify": "with done or final: a shell command that exits 0 ONLY if the task is really complete, e.g.
             test -f /p/a.txt && grep -qx 'hello' /p/a.txt  (omit only if nothing is checkable on disk)",
  "final": true if these steps should complete the whole task (no need to look again afterwards),
+ "show": with done or final: "app" when the result IS the app on screen (a site or app opened, something shown or
+         played: the user wants to look at it), "terminal" when the user needs your report (an answer, a summary,
+         a failure); default "terminal",
  "done_when": ["short fact", ...] facts VISIBLE in a screenshot once the task is complete (checked automatically
                when final); never formatting (bold, heading styles, fonts) or file contents: check those in "verify",
  "steps": [STEP, ...]}
@@ -55,7 +60,10 @@ For questions answered from pages, files or replies you read: support every fact
 quote from what you read, e.g. - Created by Linus Torvalds ("The kernel was created by Linus Torvalds in 1991").
 Never state a fact you did not read.
 STEP is one of:
-  {"do": "goto", "url": "https://..."}                          open a URL in the browser's address bar
+  {"do": "search", "query": "ilya sutskever ssi news"}     a web search with the browser's OWN default search engine
+        (typed in the address bar). Use it for every web search; never build a search-engine URL yourself.
+  {"do": "goto", "url": "https://..."}                          open a URL (the first one in a NEW tab, so the user's
+        open tabs are kept; add "same_tab": true only when the task says to use the current tab)
   {"do": "click", "target": "role and name of the element, as listed or as seen"}
   {"do": "type", "text": "..."}                                  type into the focused field (add {"do":"key","key":"enter"} to send/submit;
                                                                  a newline inside text presses Enter, which sends in chat apps)
@@ -83,6 +91,12 @@ STEP is one of:
   {"do": "read_page", "url": "https://..."}     full text of a PUBLIC page you opened (shown to you next round);
         the browser exposes no page text, and the screenshot shows only the visible part. Not for logged-in pages.
   {"do": "shell", "cmd": "ls -la ~/glimse-demo", "expect_ok": true}          run a shell command (bash, 60 s max)
+  {"do": "spawn", "cmd": "python3 -m http.server 8000", "name": "server"}     start a BACKGROUND process for a
+        multistep task (a server, a long download or conversion, a watcher); the next steps go on while it runs.
+        Same rules as shell. Add "keep": true only when the task says to leave it running.
+  {"do": "proc", "name": "server"}       its state and latest output (shown next round): check it before relying on it
+  {"do": "stop_proc", "name": "server"}  stop it as soon as its work is done (anything left is stopped at the end)
+  {"do": "help", "cmd": "tar"}     a command's real --help / man page (shown next round): check options before using one
   {"do": "fileop", "op": "move" | "copy" | "rename" | "mkdir" | "trash", "src": "~/a.txt", "dst": "~/docs/"}
         fast, exact file work (GNOME's gio), shown in Files afterwards. Use it for file tasks that do NOT name an app;
         when the task names the Files app, work in Files. It never overwrites (add "overwrite": true only when the
@@ -117,6 +131,9 @@ python3 -c to read a spreadsheet, grep). Its output is shown to you next round. 
 with zipfile + xml.etree: word/document.xml, styles in w:pStyle/@w:val). Destructive commands are
 refused. Do the user-visible work in the apps when the task names an app; use shell to check it.
 Before setting status "done", verify the result when possible (shell or a visible check) and fix it if wrong.
+"The most / largest / latest / cheapest / highest ..." questions are about the WHOLE set, not what fits on screen: sort
+by that column (a sort control, or the site's own ordering in the URL), or read the full list (read_page, scrolling
+to the end) before choosing. Pinned or featured items count too. Say in the report how you checked.
 You also get the window's visible text (answers, terminal output, page text): read it to decide what to do.
 Supervising another agent (e.g. Claude): send an instruction, wait_until it has finished responding, read
 its output in the visible text, then send the next instruction; repeat until the goal is met.
@@ -228,6 +245,23 @@ WRITES = re.compile(
     r"\.(write_text|write_bytes|unlink|mkdir|rename|replace|touch|rmdir)\(", re.I)
 
 
+# Superpowers: rare abilities that stay dormant (not in the prompt, no cost) until a run is STUCK (a repeated
+# plan, an action loop, or two failed rounds); then the planner is shown them. "superpowers": [] in config.json
+# turns them off.
+SUPERPOWERS = {
+    "realtime": """  {"do": "play", "game": "snake", "seconds": 120}     SUPERPOWER, only for a real-time game you cannot steer
+        round by round (it moves between your screenshots). A fast local controller watches a live screencast and
+        presses the arrow keys itself, then reports what it did. First get the game on screen and focused at its
+        start or countdown (pick a level, click start); "play" right after. Games: snake (grid snake, arrow keys).""",
+}
+
+
+def superpowers() -> list[str]:
+    on = config.get("superpowers", list(SUPERPOWERS))
+    on = on if isinstance(on, list) else []
+    return [k for k in SUPERPOWERS if k in on]
+
+
 def _bash_level(cmd: str) -> str:
     """What bash itself interprets: quoted strings and heredoc bodies (code for python, awk...) blanked out,
     so `python3 -c "assert len(d)>0"` or `awk '$2 > 3'` is not mistaken for a redirection."""
@@ -241,26 +275,65 @@ def is_read_only(cmd: str) -> bool:
     return ">" not in shell and not WRITES.search(re.sub(r"<<-?\s*'?\w+'?", " ", cmd))
 
 
+UNFINISHED = re.compile(
+    r"\b(still (open|showing|pending|visible|running|loading|needs?|waiting|unconfirmed)|not (yet )?(confirmed|finished|"
+    r"complete|completed|saved|done|applied|verified)|partially|pending|remains? (open|unconfirmed)|in progress|"
+    r"(cleanup|clean-up|deletion|removal|setup|installation|download|upload|update|process|work|task) (has |was )?started)\b",
+    re.I)  # "could not find X" is not here: it can be the honest answer to a question
+
+
+def unfinished_report(report: str) -> str | None:
+    """The phrase in a done-report that admits the task is not complete, if any ("the dialog is still open")."""
+    m = UNFINISHED.search(report or "")
+    return m.group(0) if m else None
+
+
+SEARCH_URL = re.compile(r"^https?://(?:www\.|search\.)?(?:brave\.com|google\.[a-z.]+|bing\.com|duckduckgo\.com|"
+                        r"startpage\.com|search\.yahoo\.com|ecosia\.org)/(?:search|html)?/?\?(?:.*&)?q=([^&#]+)", re.I)
+
+
+def search_query(url: str) -> str | None:
+    """The query of a search-engine URL (glimpse searches with the browser's own default engine instead)."""
+    from urllib.parse import unquote_plus
+    m = SEARCH_URL.match(url or "")
+    return unquote_plus(m.group(1)).strip() if m else None
+
+
+def shell_refusal(cmd: str, read_only: bool = False, remote=None) -> str | None:
+    """Why a planner command must not run (None: it may). Shared by shell steps and background processes."""
+    if not cmd.strip():
+        return "empty command"
+    # inside a throwaway test VM (remote) nothing is refused; on this desktop every guard applies
+    if remote is None and (DANGEROUS.search(cmd) or not _rm_ok(cmd)):
+        return f"refused (destructive): {cmd[:80]}"
+    if remote is None and read_only and not is_read_only(cmd):
+        return ("refused: the task names an app, so the shell is read-only (checks only). "
+                "Do the work in the app itself; use the shell only to verify.")
+    syntax = subprocess.run(["bash", "-n", "-c", cmd], capture_output=True, text=True, timeout=5)
+    if syntax.returncode != 0:  # a typo costs nothing: refuse before running anything
+        return f"bash syntax error (nothing ran): {syntax.stderr.strip()[-200:]}"
+    return None
+
+
 def run_shell(cmd: str, timeout: float = 60, read_only: bool = False, remote=None) -> tuple[str, str | None]:
     """Run a planner shell command; returns (output tail, error or None). Destructive commands are refused.
     `remote(cmd, timeout) -> (output, returncode)` runs it elsewhere (the OSWorld VM) after the same checks."""
-    if not cmd.strip():
-        return "", "empty command"
-    if DANGEROUS.search(cmd) or not _rm_ok(cmd):
-        return "", f"refused (destructive): {cmd[:80]}"
-    if read_only and not is_read_only(cmd):
-        return "", ("refused: the task names an app, so the shell is read-only (checks only). "
-                    "Do the work in the app itself; use the shell only to verify.")
+    refused = shell_refusal(cmd, read_only, remote)
+    if refused:
+        return "", refused
     if remote is not None:
         out, rc = remote(cmd, timeout)
         out = (out or "").strip()[-4000:]
-        return out or "(no output)", None if rc == 0 else f"exit {rc}: {out[-200:]}"
-    try:
-        r = subprocess.run(["bash", "-lc", cmd], capture_output=True, text=True, timeout=timeout, cwd=str(Path.home()))
-    except subprocess.TimeoutExpired:
-        return "", f"timed out after {timeout:.0f} s"
-    out = (r.stdout + ("\n" + r.stderr if r.stderr.strip() else "")).strip()[-4000:]
-    return out or "(no output)", None if r.returncode == 0 else f"exit {r.returncode}: {out[-200:]}"
+    else:
+        try:
+            r = subprocess.run(["bash", "-lc", cmd], capture_output=True, text=True, timeout=timeout, cwd=str(Path.home()))
+        except subprocess.TimeoutExpired:
+            return "", f"timed out after {timeout:.0f} s"
+        out, rc = (r.stdout + ("\n" + r.stderr if r.stderr.strip() else "")).strip()[-4000:], r.returncode
+    if rc == 0:
+        return out or "(no output)", None
+    hint = shell_guide.explain(rc, out)
+    return out or "(no output)", f"exit {rc}" + (f" ({hint})" if hint else "") + f": {out[-200:]}"
 
 
 PATH_RE = re.compile(r"(?:~|/home)/[\w./-]+\.\w+")
@@ -307,12 +380,12 @@ NOT_FOUND = re.compile(r"\b(couldn.?t|could not|can.?t|cannot|unable to|did not|
                        r"|\bnot (found|shown|visible|available|listed|displayed)\b|\bno such\b", re.I)
 
 # Steps that wait by themselves until the window is ready (page settled, document accepting keys, file on disk).
-SELF_WAITING = ("goto", "open_app", "open_file", "focus", "save_as")
+SELF_WAITING = ("goto", "search", "open_app", "open_file", "focus", "save_as")
 
 
 def step_label(s: dict) -> str:
     do = s.get("do")
-    arg = {"goto": s.get("url"), "click": s.get("target"), "double_click": s.get("target"), "type": repr(s.get("text", ""))[:60],
+    arg = {"goto": s.get("url"), "search": s.get("query"), "click": s.get("target"), "double_click": s.get("target"), "type": repr(s.get("text", ""))[:60],
            "key": s.get("key"), "save_as": s.get("path"), "open_app": s.get("name"), "wait": f"{s.get('seconds')} s",
            "wait_until": f"{s.get('fact')} (≤ {s.get('minutes', 5)} min)", "focus": s.get("window"),
            "shell": s.get("cmd"), "open_file": s.get("path"), "read_page": s.get("url"),
@@ -331,6 +404,10 @@ class HybridAgent(JevAgent):
         super().__init__(desktop, **kw)
         self.max_minutes = max_minutes
         self.timeboxed = timeboxed  # the user gave a duration: keep working until it is used up
+        self.shell_aware = False  # the bash guide joins the prompt once the task involves the shell
+        self.stuck = False  # set by a repeated plan, an action loop or failed rounds: unlocks the superpowers
+        self.own_tabs: set = set()  # browser windows where this run opened its own tab
+        self.show = "terminal"  # where the user looks when done: the planner says "app" when the result is on screen
         self.on_event = lambda kind, text: None
         self.turns = 0
         self.last_sent, self.agent_reply, self.reply_source = "", "", ""
@@ -396,7 +473,10 @@ class HybridAgent(JevAgent):
     def system_prompt(self) -> str:
         """PLANNER plus the learned harness notes (adopted by bench/harness2.py, or a candidate being probed)."""
         notes, tools = memory.harness_notes(), memory.harness_tools()
-        return (PLANNER + ("\nLearned harness notes (verified on this desktop):\n" + "\n".join(f"- {n}" for n in notes) if notes else "")
+        powers = "".join("\n" + SUPERPOWERS[k] for k in superpowers()) if self.stuck else ""
+        guide = "\n" + shell_guide.GUIDE if getattr(self, "shell_aware", False) else ""
+        return (PLANNER + guide + (f"\nSuperpower steps (you are stuck; use one only if it fits the task):{powers}" if powers else "")
+                + ("\nLearned harness notes (verified on this desktop):\n" + "\n".join(f"- {n}" for n in notes) if notes else "")
                 + ("\nLearned tool guidance (how to use each step type here):\n" +
                    "\n".join(f"- {step}: {g}" for step, lines in tools.items() for g in lines) if tools else ""))
 
@@ -611,7 +691,13 @@ class HybridAgent(JevAgent):
                       "window": (self.task_window or {}).get("title", ""), "ms": self._step_ms()})
 
     def verify_done(self, plan: dict) -> str | None:
-        """Run the planner's verification command; None if it passes (or there is none)."""
+        """Run the planner's verification command; None if it passes (or there is none). A report that itself
+        says the work is unfinished never counts as done."""
+        unfinished = unfinished_report(plan.get("report") or "")
+        if unfinished:
+            return (f"your report says the work is not finished (\"{unfinished}\"): finish it, then report; if it IS "
+                    "complete, check it on screen and write the report without that phrase; if it cannot be finished, "
+                    "set status impossible and say why")
         cmd = plan.get("verify")
         if not isinstance(cmd, str) or not cmd.strip():
             return None
@@ -780,6 +866,22 @@ class HybridAgent(JevAgent):
                 return None
         return f"'{name}' did not open a window"
 
+    def play(self, s: dict) -> str | None:
+        """The realtime superpower: live/realtime.py runs in the system Python (GStreamer) and steers on its own."""
+        if hasattr(self.d, "launch"):  # a remote desktop (the OSWorld VM): the controller watches THIS screen only
+            return "play works only on this desktop, not on a remote one"
+        secs = min(max(float(s.get("seconds", 120) or 120), 5), 600)
+        r = subprocess.run(["/usr/bin/python3", str(Path(__file__).parent / "realtime.py"), s.get("game", "snake"),
+                            "--seconds", str(secs)], capture_output=True, text=True, timeout=secs + 30)
+        try:
+            out = json.loads(r.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            return f"play failed: {(r.stderr or r.stdout).strip()[-200:]}"
+        if not out.get("ok"):
+            return f"play: {out.get('error')}"
+        self.shell_log.append(f"[play {s.get('game')}] ate {out['eaten']}, length {out['length']}, {out['seconds']} s")
+        return None
+
     def _launch(self, cmd: list[str]) -> None:
         """Start an app: on this desktop, or inside the OSWorld VM when that is the desktop."""
         if hasattr(self.d, "launch"):
@@ -799,14 +901,23 @@ class HybridAgent(JevAgent):
         do = s.get("do")
         if do == "scroll" or (do == "key" and str(s.get("key", "")).lower().replace("_", "") in ("pagedown", "end", "space")):
             self.scrolled += 1
-        if do == "goto":
+        if do == "goto" and search_query(s.get("url", "")):
+            s, do = {"do": "search", "query": search_query(s["url"])}, "search"  # a built search URL: the default engine
+        if do in ("goto", "search"):
             w = self.task_window or {}
             if not browsers.is_browser(w):  # any open browser works (Zen, Firefox, Chrome, Brave...); else the default
                 err = self.open_app(config.get("browser") or "zen browser")
                 if err:
                     return err
                 self.act({"type": "key", "key": "ctrl+t", "label": "new tab"})
-            self.act({"type": "goto", "text": s["url"], "label": f"go to {s['url']}"})
+            elif w.get("window_id") not in self.own_tabs and not s.get("same_tab"):
+                # never replace a tab the user had open (Discord, mail...): the first page of a run gets its own tab
+                self.act({"type": "key", "key": "ctrl+t", "label": "new tab"})
+            self.own_tabs.add((self.task_window or {}).get("window_id"))
+            if do == "search":  # "? " makes the address bar search with the browser's default engine, never autocomplete
+                self.act({"type": "goto", "text": "? " + s.get("query", ""), "label": f"search {s.get('query', '')}"})
+            else:
+                self.act({"type": "goto", "text": s["url"], "label": f"go to {s['url']}"})
             self.settle(None, cap=7.0, quiet=2)  # the page has loaded once it stops changing
         elif do == "click":
             target, self.closest = s.get("target", ""), []
@@ -889,6 +1000,10 @@ class HybridAgent(JevAgent):
             self.d.mcp.call("scroll", window_id=w["window_id"], direction=s.get("direction", "down"),
                             pages=min(max(float(s.get("pages", 1) or 1), 0.5), 10))
             time.sleep(0.6)
+        elif do == "play":
+            if "realtime" not in superpowers():
+                return "play is off (superpowers are disabled in config.json)"
+            return self.play(s)
         elif do == "fileop":
             if self.read_only_shell:
                 return "fileop is off: the task names an app, so do the file work in that app"
@@ -901,7 +1016,27 @@ class HybridAgent(JevAgent):
             self.shell_log.append(f"[full text of {s.get('url')}]\n{text}")
             if text.startswith("(could not"):
                 return text
+        elif do == "spawn":
+            self.shell_aware = True
+            refused = shell_refusal(s.get("cmd", ""), self.read_only_shell, getattr(self.d, "shell", None))
+            if refused:
+                return refused
+            try:
+                name = self.procs.spawn(s["cmd"], s.get("name", ""), bool(s.get("keep")))
+            except Exception as e:
+                return f"spawn failed: {e}"
+            time.sleep(1.0)  # let it start (or fail at once), then report
+            self.shell_log.append(self.procs.status(name, 15))
+        elif do == "proc":
+            self.shell_log.append(self.procs.status(s.get("name", "")))
+        elif do == "stop_proc":
+            self.shell_log.append(self.procs.stop(s.get("name", "")))
+        elif do == "help":
+            out, err = run_shell(shell_guide.help_command(s.get("cmd", "")), remote=getattr(self.d, "shell", None))
+            self.shell_log.append(f"[help {s.get('cmd', '')}]\n{out[-3500:]}")
+            self.shell_aware = True
         elif do == "shell":
+            self.shell_aware = True
             out, err = run_shell(s.get("cmd", ""), read_only=self.read_only_shell, remote=getattr(self.d, "shell", None))
             self.shell_log.append(f"$ {s.get('cmd', '')}\n{out}")
             if err:
@@ -944,9 +1079,21 @@ class HybridAgent(JevAgent):
         return None
 
     def run(self, task: str) -> dict:
+        """Work until done; background processes the plan started are stopped at the end, whatever happens."""
+        self.procs = procs.Procs(remote=getattr(self.d, "shell", None))
+        try:
+            result = self._run(task)
+        finally:
+            stopped = self.procs.close()
+        if stopped:
+            result["stopped_processes"] = stopped
+        return result
+
+    def _run(self, task: str) -> dict:
         """Work until done; give up only when Luna twice says there's no way, or nothing changes for long."""
         history: list[str] = []
         self._history = history  # read by the CLI's live log
+        self.shell_aware = self.shell_aware or shell_guide.relevant(task)
         status, n = "time limit", 0
         progress, reason, report = "", "", ""
         failed_rounds, impossible_votes, rounds = 0, 0, 0
@@ -988,6 +1135,7 @@ class HybridAgent(JevAgent):
                     self.replayed = True
                 else:
                     plan = self.plan(task + ("\n\n" + "\n".join(note) if note else ""), history, els, shot)
+                    self.show = plan.get("show") or self.show
             except RuntimeError as e:
                 status = f"error: {e}"
                 break
@@ -1021,6 +1169,7 @@ class HybridAgent(JevAgent):
                                    "Only report not found after all of that]")
                     continue
                 report = plan.get("report") or report
+                self.show = plan.get("show") or self.show
                 left = (t_end - time.perf_counter()) / 60
                 if self.timeboxed and left > 2:
                     # Time-boxed: the goal is met but time remains; Luna decides the next most useful work.
@@ -1050,6 +1199,7 @@ class HybridAgent(JevAgent):
                               "did not finish the task. Do something different (another control, a keyboard shortcut, a "
                               "menu, another app or URL), or, if the task is in fact complete, verify it and answer done.")
                 failed_rounds += 1
+                self.stuck = True
                 if failed_rounds < 10:
                     continue
                 status = "stuck: 10 rounds in a row failed or repeated themselves"
@@ -1104,7 +1254,7 @@ class HybridAgent(JevAgent):
                     still = still + 1 if self.unchanged() else 0
                     if still >= 3:
                         err = "the last 3 actions changed nothing on screen"
-                elif kind not in ("wait", "shell", "read_page"):
+                elif kind not in ("wait", "shell", "help", "spawn", "proc", "stop_proc", "read_page"):
                     still = 0
                 self.on_step({"step": n, "label": label + (f"  ✘ {err}" if err else ""), "conf": ok, "done": 0.0,
                               "window": (self.task_window or {}).get("title", ""), "ms": self._step_ms()})
@@ -1117,7 +1267,7 @@ class HybridAgent(JevAgent):
                 history.append(f"- {label}: " + (f"FAILED ({err})" if err else f"expected {s['expect']} not seen" if ok < 0.5 else
                                                  "done, but NOTHING visibly changed (the click may not have worked)" if quiet else "ok")
                                + (f"\n  what changed: {self.last_change[:400]}" if (err or ok < 0.5) and self.last_change else ""))
-                if kind not in ("key", "type", "wait", "wait_until", "shell", "read_page"):
+                if kind not in ("key", "type", "wait", "wait_until", "shell", "help", "spawn", "proc", "stop_proc", "read_page"):
                     acts.append(label)
                 if err or ok < 0.5:
                     self.failures.append(f"{label}: " + (err or f"expected {s.get('expect')} not seen"))
@@ -1130,7 +1280,7 @@ class HybridAgent(JevAgent):
                                      dialog="file dialog is the GNOME portal (GTK4): use a save_as step" if s.get("do") == "save_as" and self._portal_dialog() else None)
             # Steps that fetch information (read_page, shell output, a supervised agent's reply) must be read by
             # Luna before it can report: a report written in advance would answer without the content.
-            reads = any(x.get("do") in ("read_page", "shell", "wait_until") for x in plan["steps"])
+            reads = any(x.get("do") in ("read_page", "shell", "help", "spawn", "proc", "wait_until", "play") for x in plan["steps"])
             if paused:
                 continue  # the user worked on the screen: look again and plan from there
             if not failed and plan.get("final") and not self.timeboxed and not reads:
@@ -1159,6 +1309,7 @@ class HybridAgent(JevAgent):
                               "finishing. The goal may already be done: check the screen or verify it. Otherwise "
                               "stop repeating them and try a different approach.")
             looped = looped_now
+            self.stuck = self.stuck or bool(looped_now) or failed_rounds >= 2
             self.looped_once = self.looped_once or bool(looped_now)
             failed_rounds = failed_rounds + 1 if failed else 0
             if not failed and progress:
@@ -1181,5 +1332,5 @@ class HybridAgent(JevAgent):
             except Exception:
                 pass
         timing = {k: {"calls": self.calls[k], "ms": round(v)} for k, v in self.ms.items()}
-        return {"status": status, "steps": n, "progress": progress, "report": report, "history": history[-60:],
+        return {"status": status, "show": self.show if status == "done" else "terminal", "steps": n, "progress": progress, "report": report, "history": history[-60:],
                 "failures": self.failures[-10:], "timing": timing}

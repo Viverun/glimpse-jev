@@ -1096,3 +1096,320 @@ def test_osworld_tree_becomes_windows_and_elements(monkeypatch):
     st = mcp.call("get_app_state", window_id=wins[0]["window_id"], include_screenshot=False)
     assert [n["name"] for n in st["accessibility_tree"]] == ["sales.csv - LibreOffice Calc", "Sort Descending", "A1"]
     assert st["accessibility_tree"][1]["parent_index"] == 0 and st["accessibility_tree"][0]["depth"] == 1
+
+
+def test_superpowers_only_when_stuck(monkeypatch):
+    import config
+    import hybrid_agent
+    monkeypatch.setattr(config, "get", lambda k, d=None: d)
+    assert hybrid_agent.superpowers() == ["realtime"]
+    agent = hybrid_agent.HybridAgent.__new__(hybrid_agent.HybridAgent)
+    agent.stuck = False
+    assert '"do": "play"' not in agent.system_prompt()   # dormant: not shown, no cost
+    agent.stuck = True
+    assert '"do": "play"' in agent.system_prompt()
+    monkeypatch.setattr(config, "get", lambda k, d=None: [] if k == "superpowers" else d)
+    assert hybrid_agent.superpowers() == []
+
+
+def test_realtime_snake_reads_and_steers():
+    import numpy as np
+    realtime = pytest.importorskip("realtime")
+    f = np.full((600, 800, 3), (160, 190, 90), np.uint8)       # light green page
+    f[100:102, 100:524] = f[402:404, 100:524] = (43, 48, 24)  # board frame: 21 x 15 cells of 20 px inside
+    f[100:404, 100:102] = f[100:404, 522:524] = (43, 48, 24)
+    l, t = 102, 102
+    for cx, cy in ((10, 7), (10, 8), (10, 9)):                # snake, head at (10, 7) moving up
+        f[t + cy * 20 + 1:t + cy * 20 + 19, l + cx * 20 + 1:l + cx * 20 + 19] = (43, 48, 24)
+    fx, fy = 4, 7                                             # food with a light centre
+    f[t + fy * 20 + 2:t + fy * 20 + 18, l + fx * 20 + 2:l + fx * 20 + 18] = (43, 48, 24)
+    f[t + fy * 20 + 8:t + fy * 20 + 12, l + fx * 20 + 8:l + fx * 20 + 12] = (160, 190, 90)
+    box = realtime.find_board(f)
+    g = realtime.Grid.fit(box, 20.0)
+    assert (g.cols, g.rows) == (21, 15)
+    snake, food = g.read(f)
+    assert snake == {(10, 7), (10, 8), (10, 9)} and food == {(4, 7)}
+    assert realtime.choose(g, (10, 7), snake - {(10, 7)}, food, "up") == "left"
+
+
+def test_osworld_shell_uses_execute(monkeypatch):
+    import osworld_backend
+    sent = {}
+
+    class R:
+        ok = True
+
+        def json(self):
+            return {"output": "hello\n", "error": "", "returncode": 3}
+
+    def post(url, headers=None, data=None, timeout=None):
+        sent.update(url=url, body=json.loads(data))
+        return R()
+    monkeypatch.setattr(osworld_backend.requests, "post", post)
+    out, rc = osworld_backend.OSWorldServer("http://vm:5000").bash("echo hello; exit 3", timeout=9)
+    assert (out, rc) == ("hello\n", 3)
+    assert sent["url"].endswith("/execute") and sent["body"]["command"][:4] == ["timeout", "9", "bash", "-c"]
+
+
+def test_osworld_windows_from_wmctrl_and_indexes_kept():
+    import osworld_backend as ob
+    wm = ("0x01e00003 -1 1200 0 0 1920 32 gnome-shell.Gnome-shell host top bar\n"
+          "0x03a00007  0 2210 70 27 1850 1053 libreoffice.libreoffice-calc host sales.csv - LibreOffice Calc\n"
+          "ACTIVE 0x3a00007\n")   # xprop drops the leading zeros
+
+    class S:
+        def accessibility(self):
+            return OSWORLD_XML
+
+        def bash(self, script, timeout=60, keep_tree=False):
+            return wm, 0
+    mcp = ob.OSWorldMCP(S())
+    wins = mcp.call("list_windows")["windows"]
+    assert [(w["title"], w["focused"], w["bounds"]["width"]) for w in wins] == [("sales.csv - LibreOffice Calc", True, 1850)]
+    st = mcp.call("get_app_state", window_id=wins[0]["window_id"], include_screenshot=False)
+    assert len(st["accessibility_tree"]) == 3
+    mcp.call("get_app_state", window_id=wins[0]["window_id"], include_screenshot=False, max_nodes=1)
+    assert len(mcp._nodes) == 3   # a screenshot-only read keeps the element indexes for perform_action
+
+
+def test_shell_guide_hints_and_syntax_check():
+    import hybrid_agent
+    import shell_guide
+    assert shell_guide.relevant("rename the files in ~/Downloads") and not shell_guide.relevant("open x.com")
+    assert "not found" in shell_guide.explain(127, "bash: foo: command not found")
+    assert "path does not exist" in shell_guide.explain(2, "ls: cannot access 'x': No such file or directory")
+    assert shell_guide.help_command("tar; rm -rf ~").startswith("{ type tarrm-rf")   # only a command name survives
+    out, err = hybrid_agent.run_shell("echo 'unclosed")
+    assert out == "" and err.startswith("bash syntax error (nothing ran)")
+    out, err = hybrid_agent.run_shell("bash -c 'exit 126'")
+    assert err.startswith("exit 126 (found but not executable")
+
+
+def test_bash_guide_joins_prompt_only_when_relevant(monkeypatch):
+    import config
+    import hybrid_agent
+    monkeypatch.setattr(config, "get", lambda k, d=None: d)
+    agent = hybrid_agent.HybridAgent.__new__(hybrid_agent.HybridAgent)
+    agent.stuck, agent.shell_aware = False, False
+    assert "BASH GUIDE" not in agent.system_prompt()
+    agent.shell_aware = True
+    assert "BASH GUIDE" in agent.system_prompt()
+
+
+def test_voice_listener_stops_after_speech_and_keeps_first_word(monkeypatch):
+    import io
+    import threading
+    import numpy as np
+    import voice
+    rate = voice.RATE
+    t = np.arange(int(rate * 1.0)) / rate
+    speech = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    quiet = np.zeros(int(rate * 0.6), np.float32) + 0.0005
+    tail = np.zeros(int(rate * 3), np.float32) + 0.0005
+    pcm = (np.concatenate([quiet, speech, tail]) * 32767).astype(np.int16).tobytes()
+
+    class P:
+        def __init__(self, *a, **k):
+            self.stdout = io.BytesIO(pcm)
+
+        def terminate(self):
+            pass
+    monkeypatch.setattr(voice.subprocess, "Popen", P)
+    got, states, done = {}, [], threading.Event()
+    monkeypatch.setattr(voice, "transcribe", lambda a: got.setdefault("seconds", a.size / rate) and "open x dot com")
+    voice.Listener(lambda text: (got.update(text=text), done.set()), lambda s, level=0.0: states.append(s)).start()
+    assert done.wait(5)
+    assert got["text"] == "open x dot com"
+    assert 1.5 < got["seconds"] < 2.4      # 0.3 s before speech + 1 s speech + ~0.8 s silence, not the whole 3 s tail
+    assert states[0] == "listening" and "hearing" in states and states[-1] == "done"
+
+
+def test_voice_indicator_animates():
+    import voice
+    assert voice.indicator("listening", 0, 0) != voice.indicator("listening", 0, 1)
+    assert voice.indicator("transcribing", 0, 0) != voice.indicator("transcribing", 0, 1)
+    assert voice.indicator("hearing", 0.9, 3).startswith("🎙 ") and len(voice.indicator("hearing", 0.9, 3)) == 7
+
+
+def test_voice_intents():
+    import voice
+    for said in ("Chat mode.", "switch to chat mode", "Hey glimpse, back to typing", "stop listening", "go to text mode"):
+        assert voice.intent(said) == "chat", said
+    for said in ("Stop.", "stop it", "cancel that please", "Abort"):
+        assert voice.intent(said) == "stop", said
+    assert voice.intent("Continue.") == "continue" and voice.intent("keep going") == "continue"
+    for said in ("stop the music in Spotify", "open the chat in Discord", "add a row for March"):
+        assert voice.intent(said) == "", said   # tasks and instructions, not commands to glimpse
+
+
+def test_voice_mode_turns_glow_green(tmp_path, monkeypatch):
+    import glow
+    import voice
+    f = tmp_path / "glimpse-voice"
+    monkeypatch.setattr(voice, "VOICE_FILE", str(f))
+    monkeypatch.setattr(glow, "VOICE_FILE", str(f))
+    voice.set_mode(True)
+    assert glow.voice_now()
+    voice.set_mode(False)
+    assert not glow.voice_now()
+
+
+def test_background_process_lifecycle():
+    import procs
+    p = procs.Procs()
+    name = p.spawn("echo started; sleep 30", "worker")
+    time.sleep(0.5)
+    st = p.status(name)
+    assert st.startswith("[worker] running") and "started" in st
+    p.spawn("echo short-lived", "once")
+    time.sleep(0.5)
+    assert "ended (exit 0)" in p.status("once") and "short-lived" in p.status("once")
+    kept = p.spawn("sleep 30", "server", keep=True)
+    assert p.close() == ["worker"]                 # the task ended: unkept processes stop, finished ones are left
+    assert not p.alive("worker") and p.alive(kept)
+    p.stop(kept)
+    assert not p.alive(kept)
+    assert "no process named" in p.status("nope")
+
+
+def test_spawn_uses_shell_guards():
+    import hybrid_agent
+    assert hybrid_agent.shell_refusal("rm -rf ~") .startswith("refused (destructive)")
+    assert hybrid_agent.shell_refusal("python3 -m http.server 8000") is None
+    assert hybrid_agent.shell_refusal("touch ~/x", read_only=True).startswith("refused: the task names an app")
+
+
+def _fake_frames(tmp_path, pid=None):
+    import mmap
+    import numpy as np
+    import frames
+    shm = tmp_path / "frames"
+    w, h = 400, 200                                   # physical pixels; the logical screen is 200 x 100 (scale 2)
+    arr = np.zeros((h, w, 3), np.uint8)
+    arr[40:80, 100:200] = (255, 0, 0)                 # a red "window" at logical (50, 20) 50 x 20
+    with open(shm, "wb") as f:
+        f.write(b"\0" * (frames.SIZE + 2 * frames.SLOT))
+    with open(shm, "r+b") as f:
+        m = mmap.mmap(f.fileno(), 0)
+        m[frames.SIZE + frames.SLOT:frames.SIZE + frames.SLOT + arr.nbytes] = arr.tobytes()
+        m[:frames.HEADER.size] = frames.HEADER.pack(b"GLFR", 1, 5, time.time(), w, h, 200, 100, 0, 0, pid or os.getpid())
+        m.close()
+    return str(shm)
+
+
+def test_fast_frames_crop_the_window(tmp_path):
+    import io as _io
+    import frames
+    fs = frames.Frames()
+    assert fs._attach(_fake_frames(tmp_path))
+    t0 = time.perf_counter()
+    img, meta = fs.window_shot({"x": 50, "y": 20, "width": 50, "height": 20}, fmt="png", max_width=960)
+    assert time.perf_counter() - t0 < 0.1
+    pic = Image.open(_io.BytesIO(img)).convert("RGB")
+    assert pic.size == (100, 40) and pic.getpixel((50, 20)) == (255, 0, 0)   # logical bounds x2 = physical crop
+    assert meta["coordinate_width"] == 100 and meta["source"] == "screencast"
+    assert fs.window_shot({"x": 500, "y": 500, "width": 50, "height": 20}) is None   # off the streamed monitor
+
+
+def test_fast_frames_ignore_a_dead_daemon(tmp_path):
+    import frames
+    assert not frames.Frames()._attach(_fake_frames(tmp_path, pid=4194000))   # no such process: stale frames
+
+
+def test_screenshot_only_reads_skip_the_mcp(monkeypatch):
+    import desktop_mcp
+    import frames
+    calls = []
+    mcp = desktop_mcp.DesktopMCP.__new__(desktop_mcp.DesktopMCP)
+    mcp._wins = {7: {"window_id": 7, "focused": True, "bounds": {"x": 0, "y": 0, "width": 10, "height": 10}}}
+    mcp._verified, mcp._mismatches, mcp._fast_off = True, 0, False
+    mcp._call = lambda tool, args: calls.append((tool, args)) or {"accessibility_tree": [1, 2]}
+    fake = type("F", (), {"window_shot": lambda self, b, **k: (b"img", {"source": "screencast"})})()
+    monkeypatch.setattr(frames, "source", lambda: fake)
+    st = mcp.call("get_app_state", window_id=7, include_screenshot=True, max_nodes=1)
+    assert calls == [] and st["screenshot"]["source"] == "screencast"
+    st = mcp.call("get_app_state", window_id=7, include_screenshot=True, max_nodes=600)
+    assert calls == [("get_app_state", {"window_id": 7, "include_screenshot": False, "max_nodes": 600})]
+    assert st["accessibility_tree"] == [1, 2] and st["_images"]
+    calls.clear()
+    monkeypatch.setattr(frames, "source", lambda: None)              # no screencast: the portal path as before
+    mcp.call("get_app_state", window_id=7, include_screenshot=True)
+    assert calls[0][1]["include_screenshot"] is True
+
+
+def _png(color, size=(200, 100)):
+    import io as _io
+    b = _io.BytesIO()
+    Image.new("RGB", size, color).save(b, "PNG")
+    return b.getvalue()
+
+
+def test_fast_frames_self_check(monkeypatch):
+    import base64
+    import desktop_mcp
+    import frames
+    mcp = desktop_mcp.DesktopMCP.__new__(desktop_mcp.DesktopMCP)
+    mcp._wins = {7: {"window_id": 7, "focused": True, "bounds": {"x": 0, "y": 0, "width": 10, "height": 10}}}
+    mcp._verified, mcp._mismatches, mcp._fast_off = False, 0, False
+    portal = {"img": _png((30, 30, 30))}
+    mcp._call = lambda tool, args: {"accessibility_tree": [], "_images": [base64.b64encode(portal["img"]).decode()]}
+    fast = {"img": _png((30, 30, 30))}
+    monkeypatch.setattr(frames, "source", lambda: type("F", (), {"window_shot": lambda s, b, **k: (fast["img"], {"source": "screencast"})})())
+    st = mcp.call("get_app_state", window_id=7, max_nodes=1)
+    assert mcp._verified and st["screenshot"]["source"] == "screencast"     # same picture: the fast path is trusted
+    mcp._verified = False
+    fast["img"] = _png((230, 230, 230))                                         # a different picture
+    assert "source" not in (mcp.call("get_app_state", window_id=7, max_nodes=1).get("screenshot") or {})
+    mcp.call("get_app_state", window_id=7, max_nodes=1)
+    assert mcp._fast_off                                                         # two mismatches: off for the session
+
+
+def test_fast_frames_avoid_notifications(tmp_path, monkeypatch):
+    import frames
+    area = tmp_path / "area"
+    monkeypatch.setattr(frames, "TOAST_AREA", str(area))
+    area.write_text(f"1500 40 400 120 {time.time() + 2:.2f}")
+    assert frames.covered({"x": 0, "y": 0, "width": 1920, "height": 1000})
+    assert not frames.covered({"x": 0, "y": 0, "width": 1000, "height": 1000})
+    area.write_text(f"1500 40 400 120 {time.time() - 1:.2f}")                 # gone: no longer in the way
+    assert not frames.covered({"x": 0, "y": 0, "width": 1920, "height": 1000})
+
+
+def test_unfinished_reports_are_not_done():
+    import hybrid_agent
+    assert hybrid_agent.unfinished_report("Deleted the data, but its confirmation dialog is still open.") == "still open"
+    assert hybrid_agent.unfinished_report("**Amazon browsing data cleanup started**")
+    assert hybrid_agent.unfinished_report("Saved report.pdf in ~/Documents (2 pages).") is None
+    agent = hybrid_agent.HybridAgent.__new__(hybrid_agent.HybridAgent)
+    assert "not finished" in agent.verify_done({"report": "The setting is not yet applied."})
+
+
+def test_search_urls_become_default_engine_searches():
+    import hybrid_agent
+    assert hybrid_agent.search_query("https://search.brave.com/search?q=Ilya+Sutskever+SSI") == "Ilya Sutskever SSI"
+    assert hybrid_agent.search_query("https://www.google.com/search?hl=en&q=gnome%2050") == "gnome 50"
+    assert hybrid_agent.search_query("https://duckduckgo.com/?q=zen+browser") == "zen browser"
+    assert hybrid_agent.search_query("https://github.com/search?q=glimpse") is None      # a site's own search stays
+    assert hybrid_agent.search_query("https://x.com/home") is None
+
+
+def test_pointer_accepts_numpy_coordinates(tmp_path, monkeypatch):
+    import numpy as np
+    import cursor
+    monkeypatch.setattr(cursor, "STATE", tmp_path / "pointer.json")
+    monkeypatch.setattr(cursor.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(cursor.time, "sleep", lambda s: None)
+    cursor.click(np.float32(412.5), np.float32(230.25))     # OCR boxes are numpy: this used to crash before clicking
+    assert json.loads((tmp_path / "pointer.json").read_text()) == {"x": 412.5, "y": 230.25}
+
+
+def test_ocr_boxes_are_plain_floats():
+    import ocr
+    if not ocr.enabled():
+        pytest.skip("rapidocr not installed")
+    img = Image.new("RGB", (400, 80), "white")
+    from PIL import ImageDraw
+    ImageDraw.Draw(img).text((20, 30), "Settings", fill="black")
+    b = io.BytesIO(); img.save(b, "PNG")
+    for _, box in ocr.texts(b.getvalue()):
+        assert all(type(v) is float for v in box)

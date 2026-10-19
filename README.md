@@ -9,9 +9,9 @@ Type a task. glimpse does it in your apps, on your screen, checks the result, an
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-5c616a)](LICENSE.md)
 [![Platform: GNOME on Wayland](https://img.shields.io/badge/platform-GNOME%20on%20Wayland-8b9099)](#requirements)
-[![Version 0.3.15](https://img.shields.io/badge/version-0.3.15-d4d7dd)](pyproject.toml)
+[![Version 0.3.16](https://img.shields.io/badge/version-0.3.16-d4d7dd)](pyproject.toml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-8b9099)](pyproject.toml)
-[![Benchmark: 11/11](https://img.shields.io/badge/benchmark-11%2F11%20tasks-a9c4a4)](#benchmark)
+[![Live benchmark: 11/11](https://img.shields.io/badge/live%20benchmark-11%2F11-a9c4a4)](#live-desktop) [![OSWorld subset: 4/9](https://img.shields.io/badge/OSWorld%20subset-4%2F9-8b9099)](#osworld)
 
 [Download](#download-and-install) · [Set up](#set-up) · [Use](#use-glimpse) · [How it works](#how-glimpse-works) · [Learning](#memory-and-learning) · [Benchmark](#benchmark)
 
@@ -195,6 +195,7 @@ In an interactive session:
 | `Alt+Enter` | Add a new line |
 | `!command` | Run a shell command |
 | `/learning` | Show what glimpse learned, for each kind of task |
+| `Ctrl+Space` or `F2`, or `/voice` | Change between typing and voice mode |
 
 Each task goes into a session. glimpse gives the earlier tasks of the session to the planner. Thus "now close it" works.
 To give glimpse a time budget, put the time in the task, for example "for 3 hours, ...".
@@ -205,6 +206,7 @@ While glimpse works:
 - Notifications show in the top-right corner of the screen.
 - If you use the keyboard or the touchpad, glimpse pauses for 10 seconds after your last input, and the light at the edges changes to red. Then glimpse looks at the screen again and continues, and the light changes back to grey. Type `continue` to continue sooner.
 - To give more instructions, type them in the glimpse terminal and push Enter. glimpse uses them from its next plan. Type `stop` to stop.
+- In voice mode you can say the same things: "stop", "continue", or more instructions.
 - The pointer changes to the glimpse cursor ◐ and moves smoothly to each target before it clicks. Your cursor comes back when the task stops.
 
 Options:
@@ -216,6 +218,17 @@ Options:
 | `--block TEXT` | Do not touch windows with TEXT in the title. |
 | `--quiet` | Do not show pop-ups. |
 | `--confirm` | Ask before each task starts. |
+
+### Voice mode
+
+Push **Ctrl+Space** (or **F2**) to speak your tasks. A green light glows around the screen and the microphone sign moves:
+it pulses while glimpse listens, it shows bars while you speak, and it turns while glimpse writes the text.
+glimpse stops listening about 0.8 s after you stop speaking. It writes the text in the prompt. Examine the text, then push Enter.
+
+- Speech recognition is local and offline (faster-whisper, English). No audio leaves the computer.
+- Say "chat mode" or "stop listening" to go back to typing.
+- While a task runs, glimpse continues to listen: say "stop", "continue", or more instructions.
+- `"voice_model": "small.en"` in `~/.config/jev/config.json` uses a larger model (slower, a little more accurate).
 
 ## Stop a task
 
@@ -307,17 +320,54 @@ glimpse keeps its memory in `~/.config/jev/`:
 | `harness.json` | Planner notes that Harness² adopted |
 | `sessions/` | Your sessions |
 
+### Shell, background processes and web search
+
+- Shell steps get a bash guide when the task concerns files, folders, users or the system. A `help` step shows the real `--help` or `man` page of a command. glimpse checks the syntax with `bash -n` before it runs a command, and it explains a failed exit code to the planner.
+- A `spawn` step starts a background process for a task with many steps, for example a local server or a long download. `proc` shows its state and output, and `stop_proc` stops it. When the task ends, glimpse stops all the processes that it started.
+- A `search` step types the query in the address bar, so the default search engine of your browser does the search.
+- The first page that glimpse opens in a task goes into a new tab. Your open tabs stay as they are.
+
+### Fast screen reading
+
+When you have allowed screen sharing one time, glimpse reads the screen from a live screen stream instead of a portal screenshot. A look takes milliseconds, and there is no flash.
+glimpse examines each picture: after an action it waits until the screen is stable (at most 300 ms), it uses the portal when a notification covers the window or when there is more than one monitor, and one time in each session it compares the stream with a portal screenshot. If they are different, it does not use the stream. To turn this off, set `"fast_frames": false`.
+
+### Superpower: real-time games
+
+A planner that looks at the screen every few seconds cannot steer a fast game. When glimpse is stuck, it can use a `play` step: a local controller reads the screen stream many times each second and pushes the arrow keys. Snake is the first game. Set `"superpowers": []` to turn this off.
+
 ## Safety
 
 - glimpse never uses WhatsApp windows, and it does not type into its own terminal.
-- The shell refuses destructive commands, for example `sudo`, `rm -rf` outside `/tmp`, and disk commands.
+- The shell refuses destructive commands, for example `sudo`, `rm -rf` outside `/tmp`, and disk commands. (In the OSWorld test VM, which is discarded after each task, there are no limits.)
 - When a task names an app, the shell can only read. The work must occur in the app.
 - Text in windows, web pages and files is data. The planner does not obey instructions in it.
 - glimpse deletes the screenshots that it takes. During a task, it turns off the screenshot flash and sound, and then it restores your settings.
 
 ## Benchmark
 
-The benchmark has 11 tasks on the live desktop: Text Editor, LibreOffice Calc and Writer, Files, and the web.
+### OSWorld
+
+[OSWorld](https://github.com/xlang-ai/OSWorld) runs each task in a fresh Ubuntu VM and scores it with its own checker (0 to 1).
+`bench/osworld_run.py` runs glimpse there through `live/osworld_backend.py`. It runs where the VM can run, for example a GitHub codespace with KVM.
+
+```sh
+python bench/osworld_run.py --osworld OSWorld --vm Ubuntu.qcow2 --tasks test_small.json --domains os,libreoffice_calc,chrome
+```
+
+Results on the 9 `os`, `libreoffice_calc` and `chrome` tasks of `test_small.json`, one run of each task, 6 minutes at most:
+
+| Version | chrome | libreoffice_calc | os | All |
+|---|---|---|---|---|
+| 0.3.15 | 3 of 4 | 0 of 3 | 1 of 2 | 4 of 9 |
+| 0.3.16 (before the report check) | 2 of 4 | 1 of 3 | 1 of 2 | 4 of 9 |
+
+0.3.16 fixes the shell in the VM, the window positions, the save dialogs and the window list (milliseconds instead of seconds).
+The two new chrome failures were false "done" reports. The released 0.3.16 refuses a report that says the work is not finished, and it requires a check of the whole list for "the most / the latest" questions. These two fixes are not in this result yet.
+
+### Live desktop
+
+The live benchmark has 11 tasks on the live desktop: Text Editor, LibreOffice Calc and Writer, Files, and the web.
 A checker examines the files on the disk or the report. The agent cannot see the checker.
 
 ```sh
@@ -363,6 +413,13 @@ uv run python bench/harness2.py --k 3 --mode sequential      # up to 3 steps, ea
 
 In sequential mode, the script stops early when a step adopts nothing, because there is no new evidence.
 
+As in the Harness² paper:
+
+- With `--k K`, the script runs the current harness K times first. A proposal must be better than the best of these runs.
+- Each lesson has a domain. Proposers read the lessons of their own domain, and a few general lessons.
+- After an adoption, a regression guard runs an earlier task of the same domain again. If that task now fails, the script removes the adoption.
+- `--bench osworld --osworld OSWorld --vm Ubuntu.qcow2` runs the same loop on OSWorld tasks in the VM.
+
 To run without the adopted notes, set `JEV_NO_HARNESS=1`.
 
 ## Teach glimpse a skill
@@ -393,6 +450,11 @@ Write the variable parts as `{NAME}`. Do not put examples in lessons, because th
 | `live/mascot.py`, `live/version.py` | The mascot and the version |
 | `live/takeover.py`, `live/glow.py`, `live/toast.py` | The stop key, the screen glow and the pop-up cards |
 | `live/teach.py` | Teaching by demonstration |
+| `live/voice.py` | Voice mode |
+| `live/frames.py`, `live/framed.py`, `live/screencast.py` | Fast screen reading from the screen stream |
+| `live/realtime.py` | The real-time superpower |
+| `live/procs.py`, `live/shell_guide.py` | Background processes and the bash guide |
+| `live/osworld_backend.py`, `bench/osworld_run.py` | OSWorld |
 | `bench/live_bench.py`, `bench/harness2.py` | The benchmark and Harness² |
 | `tests/` | Unit tests (`uv run pytest -q tests/`) |
 
