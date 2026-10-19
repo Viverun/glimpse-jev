@@ -39,6 +39,7 @@ import takeover  # noqa: E402
 from jev_agent import BlockedApp, JevAgent, text_spans  # noqa: E402
 from livevm import flat_pointer  # noqa: E402
 from takeover import Takeover  # noqa: E402
+import glow  # noqa: E402
 from typesafe_sdk import Choice  # noqa: E402
 
 BLOCKED = ("whatsapp",)
@@ -282,6 +283,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
     signal.alarm(int(args.max_minutes * 60 + 120))
     status = "running"
     # The stop hotkey (default Ctrl+Alt+Esc) stops jev from any window; the mouse and touchpad stay yours to use.
+    halo = glow.start() if config.get("glow", True) else None  # grey edge glow while glimpse works
     with flat_pointer(), Takeover() as you, Live(steps_table(rows, status), console=console, refresh_per_second=8, transient=False) as live:
         def on_step(info):
             if info.get("kind") == "update":  # full text, kept above the live table as a log of Claude's turns
@@ -345,6 +347,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
             result.update(history=getattr(agent, "_history", [])[-60:], failures=getattr(agent, "failures", [])[-10:])
         live.update(steps_table(rows, result["status"]))
     signal.alarm(0)
+    glow.stop(halo)
     secs = time.perf_counter() - t0
     bring_back(desktop, own)
     desktop.mcp.close()

@@ -59,6 +59,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "confirm": ("[on|off]", "ask before starting each task"),
     "block": ("<word>", "ignore windows whose title contains this"),
     "setup": ("", "connect the planner and Jev: endpoints, keys, models"),
+    "glow": ("on|off", "the grey glow around the screen while glimpse works"),
     "doctor": ("", "check that everything jev needs is working"),
     "clear": ("", "clear the screen"),
     "exit": ("", "leave jev (also /quit, Ctrl+D)"),
@@ -472,6 +473,11 @@ class Repl:
             ("blocked", ", ".join(a.block) or "(none)"),
             ("memory", f"{len(memory.runs())} runs · {len(memory.load_profile().get('preferences', []))} preferences · JEV.md {'set' if memory.notes() else 'empty'}"),
         ])
+
+    def cmd_glow(self, rest):
+        if rest in ("on", "off"):
+            config.put("glow", rest == "on")
+        self.console.print(f"screen glow: {'on' if config.get('glow', True) else 'off'}")
 
     def cmd_setup(self, rest):
         import setup_wizard

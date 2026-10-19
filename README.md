@@ -136,6 +136,9 @@ In an interactive session:
 
 Each task goes into a session. glimpse gives the earlier tasks of the session to the planner. Thus "now close it" works.
 
+While glimpse works, a soft grey light glows around the edges of the screen. The light stops when the task stops.
+The light does not take clicks or keys. To turn it off, type `/glow off`.
+
 To give glimpse a time budget, put the time in the task, for example "for 3 hours, ...".
 glimpse then continues to work until the time is used.
 
@@ -272,6 +275,7 @@ Write variable parts as `{NAME}`. The planner copies examples exactly, so do not
 | `live/lo_dialog.py`, `live/gtk_dialog.py` | Save dialogs of LibreOffice and GNOME |
 | `live/memory.py` | Memory, lessons, workflows, harness notes |
 | `live/takeover.py` | The stop key |
+| `live/glow.py`, `live/toast.py` | The screen glow and the pop-up cards |
 | `live/teach.py` | Teaching by demonstration |
 | `bench/live_bench.py`, `bench/harness2.py` | The benchmark and Harness² |
 | `tests/` | Unit tests (`uv run pytest -q tests/`) |

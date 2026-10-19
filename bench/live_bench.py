@@ -143,7 +143,7 @@ def run(name: str, env: dict | None = None, out: Path | None = None) -> dict:
     t["setup"]()
     LOG.unlink(missing_ok=True)
     t0 = time.time()
-    proc = subprocess.Popen(["jev", "--quiet", "--block", "Glimpse and Jev", "--max-minutes", "8", t["prompt"]],
+    proc = subprocess.Popen(["glimpse", "--quiet", "--block", "Glimpse and Jev", "--max-minutes", "8", t["prompt"]],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=str(Path.home()),
                             env={**os.environ, "JEV_NO_LEARN": "1", **(env or {})}, start_new_session=True)
     try:
