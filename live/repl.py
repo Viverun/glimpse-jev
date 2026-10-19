@@ -114,10 +114,10 @@ class Repl:
         self.session = sessions.new()
         self.last: tuple[str, dict] | None = None  # prompt, result of the latest task
         self.quiet = args.quiet
-        self.style = Style.from_dict({"prompt": f"bold {accent}", "bottom-toolbar": "noreverse #888888", "bottom-toolbar.text": "noreverse #888888",
-                                      "completion-menu.completion": "bg:#1e1e2a #cccccc", "completion-menu.completion.current": f"bg:{accent} #ffffff",
-                                      "completion-menu.meta.completion": "bg:#1e1e2a #777777", "completion-menu.meta.completion.current": f"bg:{accent} #ffffff",
-                                      "auto-suggestion": "#555555"})
+        self.style = Style.from_dict({"prompt": f"bold {accent}", "bottom-toolbar": "noreverse #5c616a", "bottom-toolbar.text": "noreverse #5c616a",
+                                      "completion-menu.completion": "bg:#24262b #b8bcc4", "completion-menu.completion.current": "bg:#3a3d44 #ffffff",
+                                      "completion-menu.meta.completion": "bg:#24262b #6f747d", "completion-menu.meta.completion.current": "bg:#3a3d44 #d4d7dd",
+                                      "auto-suggestion": "#4a4e56"})
         hist = memory.DIR / "history"
         hist.parent.mkdir(parents=True, exist_ok=True)
         self.prompt = PromptSession(history=FileHistory(str(hist)), auto_suggest=AutoSuggestFromHistory(), completer=SlashCompleter(),
@@ -127,8 +127,8 @@ class Repl:
     # --- the loop ------------------------------------------------------------------------------
     def toolbar(self):
         title = self.session["title"] or "new session"
-        stale = " · ⚠ jev was updated: restart it" if self.stale() else ""
-        return f" {title}  ·  context {context.fill(self.session):.0%}  ·  stop: {takeover.stop_combo()}  ·  /help  ·  Alt+Enter newline{stale}"
+        stale = "   ·   updated: restart glimpse" if self.stale() else ""
+        return f"  ◐ {title}   ·   context {context.fill(self.session):.0%}   ·   {takeover.stop_combo()} stops   ·   /help{stale}"
 
     def stale(self) -> bool:
         """True once jev's source on disk is newer than the code this process loaded."""
@@ -141,7 +141,7 @@ class Repl:
         interrupted = False
         while True:
             try:
-                text = self.prompt.prompt([("class:prompt", "glimpse › ")]).strip()
+                text = self.prompt.prompt([("class:prompt", "› ")]).strip()
                 interrupted = False
             except KeyboardInterrupt:
                 if interrupted:
@@ -211,24 +211,28 @@ class Repl:
 
     # --- commands ------------------------------------------------------------------------------
     def say(self, text: str) -> None:
-        self.console.print(f"[{self.accent}]✔ {text}[/]")
+        self.console.print(f"  [#a9c4a4]✔[/] [#b8bcc4]{text}[/]")
 
     def command(self, name: str, rest: str) -> str | None:
         name = ALIASES.get(name, name)
         fn = getattr(self, f"cmd_{name}", None)
         if name not in COMMANDS or fn is None:
             near = [c for c in COMMANDS if c.startswith(name[:2])][:4]
-            self.console.print(f"[red]unknown command /{name}[/]" + (f"  [dim]did you mean {', '.join('/' + c for c in near)}?[/]" if near else "  [dim]try /help[/]"))
+            self.console.print(f"  [#d49a92]unknown command /{name}[/]" + (f"  [#8b9099]did you mean {', '.join('/' + c for c in near)}?[/]" if near else "  [#8b9099]try /help[/]"))
             return None
         return fn(rest)
 
     def table(self, title: str, rows: list[tuple], empty: str = "") -> None:
-        t = Table.grid(padding=(0, 2))
-        t.add_column(style="dim")
-        t.add_column()
+        from rich.padding import Padding
+        from rich.rule import Rule
+        t = Table.grid(padding=(0, 3))
+        t.add_column(style="#8b9099")
+        t.add_column(style="#d4d7dd")
         for r in rows:
             t.add_row(*r)
-        self.console.print(Panel(t if rows else Text(empty), title=f"[bold]{title}[/]", border_style=self.accent, padding=(0, 1)))
+        self.console.print(Text(""))
+        self.console.print(Rule(Text.assemble(("◐ ", "#d4d7dd"), (title, "bold #d4d7dd")), align="left", style="#5c616a"))
+        self.console.print(Padding(t if rows else Text(empty, style="#8b9099"), (1, 0, 1, 2)))
 
     def cmd_help(self, rest):
         self.table("glimpse commands", [(f"/{n} {h}".rstrip(), d) for n, (h, d) in COMMANDS.items()] +
@@ -296,7 +300,7 @@ class Repl:
         s, w = self.session, context.window()
         f = context.fill(s)
         n = round(min(f, 1) * 30)
-        bar = Text("█" * n + "░" * (30 - n), style="green" if f < 0.7 else "yellow" if f < context.compact_at() else "red")
+        bar = Text("█" * n + "░" * (30 - n), style="#a9c4a4" if f < 0.7 else "#d8c48f" if f < context.compact_at() else "#d49a92")
         live = len(s["turns"]) - s.get("compacted", 0)
         self.table("context", [
             ("used", Text.assemble(bar, f"  {context.used(s):,} / {w:,} tokens ({f:.0%})")),
@@ -500,6 +504,6 @@ class Repl:
             ("system python with GTK3", subprocess.run(["/usr/bin/python3", "-c", "import gi;gi.require_version('Gtk','3.0')"], capture_output=True).returncode == 0,
              "install python3-gi and gir1.2-gtk-3.0"),
         ]
-        self.table("glimpse doctor", [(Text("✔" if ok else "✘", style="green" if ok else "red"), name if ok else f"{name}  [dim]{fix}[/]") for name, ok, fix in checks])
+        self.table("glimpse doctor", [(Text("✔" if ok else "✘", style="#a9c4a4" if ok else "#d49a92"), name if ok else f"{name}  [dim]{fix}[/]") for name, ok, fix in checks])
         if all(ok for _, ok, _ in checks):
             toast.show("glimpse doctor", "Everything looks good.", "done", ms=3000)

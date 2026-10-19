@@ -23,6 +23,7 @@ from rich.align import Align
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
+from rich.padding import Padding
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -43,7 +44,11 @@ import glow  # noqa: E402
 from typesafe_sdk import Choice  # noqa: E402
 
 BLOCKED = ("whatsapp",)
-ACCENT = "#7c5cff"
+# Grey theme: light grey for what matters, mid grey for labels, dark grey for the rest; soft colors only for results.
+ACCENT = "#d4d7dd"   # light grey: names, the prompt, the wordmark
+MUTED = "#8b9099"    # labels and hints
+FAINT = "#5c616a"    # rules, step numbers, timings
+GOOD, WARN, BAD = "#a9c4a4", "#d8c48f", "#d49a92"  # muted green / amber / rose
 console = Console()
 
 
@@ -88,45 +93,86 @@ def app_in_prompt(prompt: str, apps: dict[str, str]) -> tuple[str, str] | None:
 
 
 # --- UI ----------------------------------------------------------------------------------------
-def header(prompt: str, target: str, budget: str = "") -> Panel:
-    t = Text()
-    t.append("task    ", style="dim"); t.append(prompt + "\n", style="bold")
-    t.append("window  ", style="dim"); t.append(target + "\n", style=ACCENT)
-    t.append("\nstop    ", style="dim"); t.append(f"{takeover.stop_combo()}  ·  Ctrl+C  ·  touch {STOP_FILE}", style="yellow")
+def wordmark(right: str = ""):
+    """◐ glimpse ─────────── right"""
+    from rich.rule import Rule
+    return Rule(Text.assemble(("◐ ", ACCENT), ("glimpse", f"bold {ACCENT}"), (f"  {right}" if right else "", FAINT)),
+                align="left", style=FAINT, characters="─")
+
+
+def header(prompt: str, target: str, budget: str = ""):
+    t = Table.grid(padding=(0, 2))
+    t.add_column(style=MUTED, justify="right")
+    t.add_column()
+    t.add_row("task", Text(prompt, style=f"bold {ACCENT}"))
+    t.add_row("where", Text(target, style=ACCENT))
     if budget:
-        t.append("\nbudget  ", style="dim"); t.append(budget)
-    return Panel(t, title=f"[bold {ACCENT}]◆ glimpse[/] [dim]computer use · the planner plans · Jev acts[/]", border_style=ACCENT, padding=(0, 1))
+        t.add_row("budget", Text(budget, style=ACCENT))
+    t.add_row("stop", Text(f"{takeover.stop_combo()}", style=MUTED))
+    return Group(Text(""), wordmark("working"), Padding(t, (1, 0, 1, 2)))
 
 
 def bar(p: float, width: int = 10) -> Text:
     n = round(p * width)
-    color = "green" if p >= 0.7 else "yellow" if p >= 0.4 else "red"
-    return Text("█" * n + "░" * (width - n), style=color) + Text(f" {p:.2f}", style="dim")
+    color = ACCENT if p >= 0.7 else WARN if p >= 0.4 else BAD
+    return Text("━" * n, style=color) + Text("━" * (width - n), style="#33363c") + Text(f" {p:.2f}", style=FAINT)
 
 
 def steps_table(rows: list[dict], status: str) -> Table:
-    tb = Table(expand=True, box=None, header_style="dim", pad_edge=False)
-    tb.add_column("#", width=3, justify="right", style="dim")
+    tb = Table(expand=True, box=None, header_style=FAINT, pad_edge=False)
+    tb.add_column("#", width=3, justify="right", style=FAINT)
     tb.add_column("action", ratio=1, overflow="ellipsis", no_wrap=True)
     tb.add_column("check", width=16)
     tb.add_column("", width=1)
-    tb.add_column("ms", width=6, justify="right", style="dim")
+    tb.add_column("ms", width=6, justify="right", style=FAINT)
     for r in rows[-16:]:
         label = r["label"]
         if r.get("kind") == "plan":
-            tb.add_row("", Text(label, style=f"italic {ACCENT}"), Text(""), Text(""), str(r["ms"]))
+            tb.add_row("", Text(label, style=f"italic {MUTED}"), Text(""), Text(""), str(r["ms"]))
             continue
         if r.get("kind") == "update":
             continue  # printed in full above the table
         failed = "✘" in label or r["conf"] < 0.5
-        tb.add_row(str(r["step"]), Text(label, style="red" if failed else ""), bar(r["conf"]), Text(""), str(r["ms"]))
-    tb.caption = Text(status, style=f"bold {ACCENT}")
+        tb.add_row(str(r["step"]), Text(label, style=BAD if failed else ACCENT), bar(r["conf"]), Text(""), str(r["ms"]))
+    tb.caption = Text(f"◐ {status}", style=MUTED)
     return tb
+
+
+SPIN = "◐◓◑◒"
+VERBS = ["Glimpsing", "Looking", "Reading the screen", "Planning", "Reaching", "Checking", "Pointing", "Typing",
+         "Squinting", "Tracing", "Lining up", "Peering"]
+SHIMMER = ["#5c616a", "#6f747d", "#8b9099", "#a6abb3", "#c3c7ce", "#d4d7dd", "#c3c7ce", "#a6abb3", "#8b9099", "#6f747d"]
+
+
+class Working:
+    """The live view of a running task: the step table plus an animated status line (like Claude Code's).
+    Rendered on every refresh, so the glyph turns and the word shimmers even while glimpse waits on a model."""
+
+    def __init__(self, rows: list[dict], t0: float):
+        self.rows, self.t0, self.status = rows, t0, "running"
+
+    def line(self) -> Text:
+        now = time.monotonic()
+        t = now - self.t0
+        verb = self.status if self.status != "running" else VERBS[int(t / 4) % len(VERBS)] + "…"
+        glyph = SPIN[int(now * 5) % len(SPIN)]
+        out = Text("  ")
+        out.append(glyph + " ", style=f"bold {ACCENT}")
+        for i, ch in enumerate(verb):  # a light band sweeps across the word
+            out.append(ch, style=SHIMMER[(i - int(now * 14)) % len(SHIMMER)])
+        secs = f"{t / 60:.0f} min {t % 60:.0f} s" if t >= 60 else f"{t:.0f} s"
+        out.append(f"   {secs}  ·  {takeover.stop_combo()} to stop", style=FAINT)
+        return out
+
+    def __rich__(self):
+        tb = steps_table(self.rows, self.status)
+        tb.caption = None
+        return Group(tb, Text(""), self.line())
 
 
 def summary(result: dict, secs: float, rows: list[dict]):
     ok = result["status"] == "done"
-    color = "green" if ok else "red"
+    color = FAINT
     parts = []
     report = (result.get("report") or "").strip()
     if report:
@@ -134,7 +180,7 @@ def summary(result: dict, secs: float, rows: list[dict]):
     elif result.get("progress"):
         parts.append(Text(result["progress"]))
     if not ok:
-        parts.append(Text(f"\n✘ {result['status']}" + (f": {result['error']}" if result.get("error") else ""), style="bold red"))
+        parts.append(Text(f"\n✘ {result['status']}" + (f": {result['error']}" if result.get("error") else ""), style=f"bold {BAD}"))
     acts = [r for r in rows if r.get("kind") not in ("plan", "update")]
     turns = [r for r in rows if r.get("kind") == "update"]
     timing = result.get("timing") or {}
@@ -145,9 +191,10 @@ def summary(result: dict, secs: float, rows: list[dict]):
         stats += f"  ·  {len(turns)} Claude turn{'s' * (len(turns) != 1)}"
     if timing:
         stats += "  ·  " + "  ".join(f"{k} {v['ms'] / 1000:.1f}s" for k, v in timing.items() if v.get("ms", 0) >= 100)
-    parts.append(Text("\n" + stats, style="dim"))
-    title = "[bold green]✔ done[/]" if ok else "[bold red]✘ not finished[/]"
-    return Panel(Group(*parts), title=title, title_align="left", border_style=color, padding=(1, 2))
+    parts.append(Text("\n" + stats, style=FAINT))
+    from rich.rule import Rule
+    head = Text.assemble(("✔ ", GOOD), ("done", f"bold {GOOD}")) if ok else Text.assemble(("✘ ", BAD), ("not finished", f"bold {BAD}"))
+    return Group(Text(""), Rule(head, align="left", style=color), Padding(Group(*parts), (1, 0, 1, 2)))
 
 
 def duration_minutes(prompt: str) -> float | None:
@@ -217,20 +264,25 @@ def main() -> None:
     sessions.save(repl.session)
 
 
-def welcome(session: dict) -> Panel:
-    t = Text()
-    t.append("Describe a task on your desktop.\n", style="bold")
-    t.append("/help for commands  ·  Alt+Enter for a newline  ·  ", style="dim")
-    t.append(f"{takeover.stop_combo()} stops a running task", style="dim")
+def welcome(session: dict):
+    keys = Table.grid(padding=(0, 3))
+    for _ in range(3):
+        keys.add_column()
+    hint = lambda k, v: Text.assemble((k, ACCENT), ("  " + v, MUTED))  # noqa: E731
+    keys.add_row(hint("/help", "commands"), hint("alt+enter", "new line"), hint(takeover.stop_combo(), "stop a task"))
+    body = [Text(""), wordmark("computer use for your desktop"), Text(""),
+            Padding(Text("What should I do on your desktop?", style=f"bold {ACCENT}"), (0, 0, 0, 2)),
+            Padding(keys, (1, 0, 0, 2))]
     if session["turns"]:
-        t.append(f"\n\nresumed “{session['title']}”: {len(session['turns'])} earlier task{'s' * (len(session['turns']) != 1)}", style=ACCENT)
-    return Panel(t, title=f"[bold {ACCENT}]◆ glimpse[/] [dim]computer use · the planner plans · Jev acts[/]", border_style=ACCENT, padding=(1, 2))
+        n = len(session["turns"])
+        body.append(Padding(Text(f"continuing “{session['title']}” · {n} earlier task{'s' * (n != 1)}", style=MUTED), (1, 0, 0, 2)))
+    return Group(*body)
 
 
 def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
     """Run one task. Returns (result, seconds), or None if it was refused or never started."""
     if any(b in args.prompt.lower() for b in BLOCKED):
-        console.print(Panel("[bold red]refused[/]: this prompt involves a blocked app (WhatsApp).", border_style="red"))
+        console.print(Text.assemble(("  ✘ ", BAD), ("refused: this task involves a blocked app (WhatsApp)", MUTED)))
         sys.exit(2)
     if not config.setting("typesafe_api_key"):
         console.print("[red]No TypeSafe API key. Run [bold]glimpse setup[/bold].[/]")
@@ -284,13 +336,13 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
     status = "running"
     # The stop hotkey (default Ctrl+Alt+Esc) stops jev from any window; the mouse and touchpad stay yours to use.
     halo = glow.start() if config.get("glow", True) else None  # grey edge glow while glimpse works
-    with flat_pointer(), Takeover() as you, Live(steps_table(rows, status), console=console, refresh_per_second=8, transient=False) as live:
+    view = Working(rows, time.monotonic())
+    with flat_pointer(), Takeover() as you, Live(view, console=console, refresh_per_second=12, transient=False) as live:
         def on_step(info):
             if info.get("kind") == "update":  # full text, kept above the live table as a log of Claude's turns
-                live.console.print(Text.assemble(("● ", "bold green"), (info["label"].split(" · ", 1)[0][2:] + "  ", "bold green"),
+                live.console.print(Text.assemble(("● ", f"bold {GOOD}"), (info["label"].split(" · ", 1)[0][2:] + "  ", f"bold {GOOD}"),
                                                  (info["label"].split(" · ", 1)[-1], "")))
             rows.append(info)
-            live.update(steps_table(rows, "running"))
             try:  # written as it goes, so a stuck or killed run can still be diagnosed
                 save_log(args.prompt, {"status": "running", "history": getattr(agent, "_history", [])[-40:]},
                          time.perf_counter() - t0, rows)
@@ -300,7 +352,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
         try:
             if app:
                 before = {w["window_id"] for w in desktop.windows()}
-                live.update(steps_table(rows, f"launching {app[0].title()}…"))
+                view.status = f"launching {app[0].title()}…"
                 proc = subprocess.Popen(["gtk-launch", app[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                 for i in range(30):
                     time.sleep(0.5)
@@ -323,7 +375,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
                 if not args.quiet:
                     agent.on_event = lambda kind, text: (notify.progress(text) if kind == "progress"
                                                          else notify.turn(text, agent.turns) if kind == "update" else None)
-                live.update(steps_table(rows, "recalling…"))
+                view.status = "Remembering…"
                 prof = memory.refresh_profile(installed_apps(), desktop.windows())
                 hint = (f"\nLikely app for this task: {guess[0].title()} (desktop id {guess[1]}); open it with open_app "
                         f"unless another open window is clearly the right one.") if guess else ""
@@ -335,6 +387,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
                 flow = memory.workflows_for(agent.jev, args.prompt)
                 if flow:
                     agent.context += "\n\n" + flow
+            view.status = "running"
             result = agent.run(args.prompt)
             you.disarm()
         except KeyboardInterrupt as e:
@@ -345,7 +398,8 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
             result = {"status": "error", "error": repr(e)[:200], "steps": len(rows), "timing": {}}
         if result["status"] in ("stopped", "blocked", "error"):  # keep what happened, for debugging
             result.update(history=getattr(agent, "_history", [])[-60:], failures=getattr(agent, "failures", [])[-10:])
-        live.update(steps_table(rows, result["status"]))
+        view.status = "✔ done" if result["status"] == "done" else f"✘ {result['status']}"
+        live.update(steps_table(rows, view.status))
     signal.alarm(0)
     glow.stop(halo)
     secs = time.perf_counter() - t0
