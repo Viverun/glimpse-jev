@@ -582,12 +582,28 @@ def harness_notes() -> list[str]:
     return [n for n in dict.fromkeys(notes + ov.get("notes", [])) if n not in drop]
 
 
-def adopt_harness(notes_add: list[str], notes_remove: list[str] = ()) -> None:
+def harness_tools() -> dict[str, list[str]]:
+    """Tool guidance per step type ({"select": [...], "save_as": [...]}): adopted plus any candidate overlay."""
+    import os
+    tools: dict[str, list[str]] = {}
+    if not os.environ.get("JEV_NO_HARNESS"):
+        try:
+            tools = json.loads(HARNESS.read_text()).get("tools", {})
+        except Exception:
+            pass
+    for step, lines in (_overlay().get("tools") or {}).items():
+        tools[step] = list(dict.fromkeys(tools.get(step, []) + list(lines)))
+    return tools
+
+
+def adopt_harness(notes_add: list[str], notes_remove: list[str] = (), tools: dict | None = None) -> None:
     try:
         h = json.loads(HARNESS.read_text())
     except Exception:
         h = {"notes": []}
     h["notes"] = [n for n in dict.fromkeys(h.get("notes", []) + list(notes_add)) if n not in set(notes_remove)][-40:]
+    for step, lines in (tools or {}).items():
+        h.setdefault("tools", {})[step] = list(dict.fromkeys(h.get("tools", {}).get(step, []) + list(lines)))[-8:]
     DIR.mkdir(parents=True, exist_ok=True)
     HARNESS.write_text(json.dumps(h, indent=1))
 

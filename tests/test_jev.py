@@ -874,3 +874,44 @@ def test_clear_starts_a_fresh_session(tmp_path, monkeypatch):
     r.cmd_clear("")
     assert r.session["id"] != "old" and r.session["turns"] == [] and r.last is None
     assert "\033[3J" in out.getvalue()  # the scrollback is erased too
+
+
+def _h2(monkeypatch, mem, proposals, probe_rows):
+    sys.path.insert(0, str(ROOT / "bench"))
+    import harness2
+    monkeypatch.setattr(harness2, "WORK", mem / "h2")
+    monkeypatch.setattr(harness2, "LIBRARY", mem / "lib.jsonl")
+    props, rows = list(proposals), dict(probe_rows)
+    monkeypatch.setattr(harness2, "propose", lambda dim, name, base, earlier=(): props.pop(0) if props else {"keep_base": True})
+    monkeypatch.setattr(harness2, "probe", lambda name, cand, label: rows[label])
+    monkeypatch.setattr(harness2, "luna_json", lambda system, text: {})
+    monkeypatch.setattr(harness2, "evidence", lambda name, base: "")
+    return harness2
+
+
+def test_harness2_parallel_budget_and_tool_guidance(mem, monkeypatch):
+    base = {"ok": True, "plans": 4, "seconds": 60, "history": []}
+    good = {"ok": True, "plans": 1, "seconds": 20, "history": []}
+    meh = {"ok": True, "plans": 4, "seconds": 59, "history": []}
+    h2 = _h2(monkeypatch, mem,
+             [{"notes": ["n1"]}, {"tools": {"select": ["check the status bar"]}},   # INV1, INV2
+              {"lessons": {"zen": ["l1"]}}, {"keep_base": True}],                    # DOM1, then DOM stops
+             {"INV1": meh, "INV2": good, "DOM1": meh})
+    r = h2.improve("calc_sort", base, k=2)
+    assert set(r["probes"]) == {"INV1", "INV2", "DOM1"} and r["adopted"] == "INV2"
+    assert memory.harness_tools() == {"select": ["check the status bar"]}
+    a = make_agent([])
+    assert "select: check the status bar" in a.system_prompt()
+
+
+def test_harness2_sequential_stops_without_evidence(mem, monkeypatch):
+    base = {"ok": True, "plans": 4, "seconds": 60, "history": []}
+    h2 = _h2(monkeypatch, mem, [{"notes": ["n1"]}], {"INV": {"ok": True, "plans": 1, "seconds": 20, "history": []}})
+    calls = []
+    real = h2.improve
+    monkeypatch.setattr(h2, "improve", lambda name, b, k=1: (calls.append(b), real(name, b, k))[1])
+    monkeypatch.setattr(h2.live_bench, "run", lambda name, **kw: base)
+    monkeypatch.setattr(h2.live_bench, "cleanup_windows", lambda: None)
+    monkeypatch.setattr(h2.time, "sleep", lambda s: None)
+    h2.main(["calc_sort"], k=3, mode="sequential")
+    assert len(calls) == 2 and calls[1]["plans"] == 1  # step 2 starts from step 1's winner; nothing more to try: stop

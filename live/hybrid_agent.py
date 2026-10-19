@@ -359,8 +359,10 @@ class HybridAgent(JevAgent):
 
     def system_prompt(self) -> str:
         """PLANNER plus the learned harness notes (adopted by bench/harness2.py, or a candidate being probed)."""
-        notes = memory.harness_notes()
-        return PLANNER + ("\nLearned harness notes (verified on this desktop):\n" + "\n".join(f"- {n}" for n in notes) if notes else "")
+        notes, tools = memory.harness_notes(), memory.harness_tools()
+        return (PLANNER + ("\nLearned harness notes (verified on this desktop):\n" + "\n".join(f"- {n}" for n in notes) if notes else "")
+                + ("\nLearned tool guidance (how to use each step type here):\n" +
+                   "\n".join(f"- {step}: {g}" for step, lines in tools.items() for g in lines) if tools else ""))
 
     def luna_json(self, system: str, text: str) -> dict:
         return luna_json(system, text, self.luna)

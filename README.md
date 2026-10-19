@@ -9,7 +9,7 @@ Type a task. glimpse does it in your apps, on your screen, checks the result, an
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-5c616a)](LICENSE.md)
 [![Platform: GNOME on Wayland](https://img.shields.io/badge/platform-GNOME%20on%20Wayland-8b9099)](#requirements)
-[![Version 0.3.3](https://img.shields.io/badge/version-0.3.3-d4d7dd)](pyproject.toml)
+[![Version 0.3.4](https://img.shields.io/badge/version-0.3.4-d4d7dd)](pyproject.toml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-8b9099)](pyproject.toml)
 [![Benchmark: 11/11](https://img.shields.io/badge/benchmark-11%2F11%20tasks-a9c4a4)](#benchmark)
 
@@ -283,7 +283,15 @@ Do not touch the desktop while the benchmark runs. Results on the author's machi
 ## Improve the harness (Harness²)
 
 `bench/harness2.py` adapts [Harness²](https://github.com/google-research/harness2) to glimpse.
-The harness is the planner notes and the app lessons. The models do not change.
+The models do not change. The script can edit three parts of the harness:
+
+| Part | Content | Read by the planner |
+|---|---|---|
+| Notes | Rules for all tasks | On each task |
+| Tool guidance | How to use each step type well, for example `select` or `save_as` | On each task |
+| Lessons | How-tos for each app | When the task uses that app |
+
+The script does not edit the safety rules.
 
 For each benchmark task, the script does these steps:
 
@@ -295,9 +303,13 @@ For each benchmark task, the script does these steps:
 6. A reflector records what each change did, and at most one lesson for later tasks.
 
 ```sh
-uv run python bench/harness2.py                  # all tasks
-uv run python bench/harness2.py organize         # one task
+uv run python bench/harness2.py                              # all tasks, one step
+uv run python bench/harness2.py organize                     # one task
+uv run python bench/harness2.py --k 3 --mode parallel        # 3 different proposals from each proposer
+uv run python bench/harness2.py --k 3 --mode sequential      # up to 3 steps, each from the last adopted harness
 ```
+
+In sequential mode, the script stops early when a step adopts nothing, because there is no new evidence.
 
 To run without the adopted notes, set `JEV_NO_HARNESS=1`.
 

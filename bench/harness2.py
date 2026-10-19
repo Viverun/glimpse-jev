@@ -50,6 +50,8 @@ change between tasks: the planner copies examples literally."""
 
 HARNESS = """jev's harness (what you may edit):
 - "notes": always-on planner notes, read on EVERY task (keep them few and universal)
+- "tools": tool guidance per step type ({"select": [...], "save_as": [...], "click": [...]}): how to use a step
+  well on this desktop, read on every task that uses it
 - "lessons": per-app how-tos ({"libreoffice-calc": [...], "libreoffice-writer": [...], "org.gnome.TextEditor": [...],
   "org.gnome.Nautilus": [...], "zen": [...], "general": [...]}), shown only when that app is involved.
   A lesson with a recognisable trigger beats an always-on note.
@@ -78,6 +80,7 @@ OUTPUT = """Reply with JSON only:
  "rationale": "the earliest divergence you found and why this edit fixes it (cite the step)",
  "notes": ["always-on note to add", ...],
  "notes_remove": ["existing note to drop", ...],
+ "tools": {"<step type>": ["guidance to add", ...]},
  "lessons": {"<app>": ["lesson to add", ...]}}"""
 
 COMPOSE = """You compose a refined harness from candidates that were each probed on the same task. Combine the edits whose
@@ -127,23 +130,27 @@ def evidence(name: str, base: dict) -> str:
             + ("\n".join(f"- cue: {e['cue']} | lesson: {e['lesson']} ({e.get('confidence')})" for e in lib) or "(empty)"))
 
 
-def propose(dim: str, name: str, base: dict) -> dict:
+def propose(dim: str, name: str, base: dict, earlier: list[dict] = ()) -> dict:
     system = "\n\n".join(["You improve jev, a computer-use agent on a live GNOME desktop, by editing its harness.",
                           DIMS[dim], HARNESS, GENERALIZE, KEEP_BASE, EVIDENCE_BOUNDARY, OUTPUT])
+    text = evidence(name, base)
+    if earlier:  # parallel budget K: explore a different edit than the candidates already proposed
+        text += "\n\nCANDIDATES ALREADY PROPOSED (propose a DIFFERENT edit, or keep_base):\n" + json.dumps(earlier, indent=1)[:6000]
     try:
-        return luna_json(system, evidence(name, base))
+        return luna_json(system, text)
     except Exception as e:
         return {"keep_base": True, "rationale": f"proposer failed: {e!s:.100}"}
 
 
 def empty(c: dict) -> bool:
-    return c.get("keep_base") or not (c.get("notes") or c.get("notes_remove") or any(c.get("lessons", {}).values()))
+    return c.get("keep_base") or not (c.get("notes") or c.get("notes_remove") or any((c.get("lessons") or {}).values())
+                                      or any((c.get("tools") or {}).values()))
 
 
 def probe(name: str, cand: dict, label: str) -> dict:
     WORK.mkdir(exist_ok=True)
     f = WORK / f"{name}.{label}.json"
-    f.write_text(json.dumps({k: cand.get(k) or ([] if k != "lessons" else {}) for k in ("notes", "notes_remove", "lessons")}))
+    f.write_text(json.dumps({k: cand.get(k) or ({} if k in ("lessons", "tools") else []) for k in ("notes", "notes_remove", "lessons", "tools")}))
     print(f"    probe {label} …", flush=True)
     row = live_bench.run(name, env={"JEV_HARNESS_OVERLAY": str(f)}, out=WORK / "probes.jsonl")
     live_bench.cleanup_windows()
@@ -165,26 +172,35 @@ def better(row: dict, base: dict) -> bool:
 
 
 def merge(*cands: dict) -> dict:
-    out = {"notes": [], "notes_remove": [], "lessons": {}}
+    out = {"notes": [], "notes_remove": [], "lessons": {}, "tools": {}}
     for c in cands:
         out["notes"] += [n for n in c.get("notes", []) if n not in out["notes"]]
         out["notes_remove"] += c.get("notes_remove", [])
-        for app, ls in (c.get("lessons") or {}).items():
-            out["lessons"].setdefault(app, []).extend(x for x in ls if x not in out["lessons"][app])
+        for key in ("lessons", "tools"):
+            for k, ls in (c.get(key) or {}).items():
+                out[key].setdefault(k, []).extend(x for x in ls if x not in out[key][k])
     return out
 
 
-def improve(name: str, base: dict) -> dict:
+def improve(name: str, base: dict, k: int = 1) -> dict:
     print(f"▶ {name}: base {'✔' if base['ok'] else '✘'} {base['seconds']} s, {base['plans']} plans", flush=True)
-    cands = {dim: propose(dim, name, base) for dim in DIMS}
-    probes = {}
-    for dim, c in cands.items():
-        print(f"  {dim}: {'KEEP_BASE' if empty(c) else c.get('rationale', '')[:160]}", flush=True)
-        if not empty(c):
-            probes[dim] = probe(name, c, dim)
+    cands, probes = {}, {}
+    for dim in DIMS:
+        mine: list[dict] = []
+        for i in range(k):  # parallel budget: K different candidates per proposer
+            label = dim if k == 1 else f"{dim}{i + 1}"
+            c = propose(dim, name, base, mine)
+            print(f"  {label}: {'KEEP_BASE' if empty(c) else c.get('rationale', '')[:160]}", flush=True)
+            if empty(c):
+                break
+            mine.append(c)
+            cands[label] = c
+            probes[label] = probe(name, c, label)
     good = [d for d, r in probes.items() if better(r, base)]
-    if len(good) == 2:  # both helped: compose them and probe the combination
-        composed = merge(cands["INV"], cands["DOM"])
+    good_dims = {d.rstrip("0123456789") for d in good}
+    if good_dims == set(DIMS):  # both proposers found something that helps: compose the best of each, probe it
+        best = {dim: max((d for d in good if d.rstrip("0123456789") == dim), key=lambda d: score(probes[d])) for dim in DIMS}
+        composed = merge(*(cands[d] for d in best.values()))
         try:
             composed = luna_json(COMPOSE, evidence(name, base) + "\n\nCANDIDATES AND THEIR PROBES:\n" + json.dumps(
                 {d: {"edit": cands[d], "probe": trajectory(probes[d])} for d in probes}, indent=1)) or composed
@@ -195,7 +211,7 @@ def improve(name: str, base: dict) -> dict:
     winner = max((d for d in probes if better(probes[d], base)), key=lambda d: score(probes[d]), default=None)
     if winner:
         c = cands[winner]
-        memory.adopt_harness(c.get("notes", []), c.get("notes_remove", []))
+        memory.adopt_harness(c.get("notes", []), c.get("notes_remove", []), c.get("tools") or {})
         for app, ls in (c.get("lessons") or {}).items():
             for lesson in ls:
                 memory.teach(app, lesson, source=f"harness2 {name}/{winner}")
@@ -214,19 +230,32 @@ def improve(name: str, base: dict) -> dict:
                 f.write(json.dumps({**exp, "task": name, "time": time.strftime("%Y-%m-%d %H:%M")}) + "\n")
             print(f"  lesson: {exp['lesson'][:160]}", flush=True)
         record["reflection"] = ref
+    WORK.mkdir(parents=True, exist_ok=True)
     with (WORK / "rounds.jsonl").open("a") as f:
         f.write(json.dumps(record) + "\n")
     return {"task": name, "base": base, "adopted": winner, "probes": probes}
 
 
-def main(names: list[str]) -> None:
+def main(names: list[str], k: int = 1, mode: str = "parallel") -> None:
+    """parallel: one step with K candidates per proposer. sequential: K steps in a row, each starting from the
+    harness the previous step adopted (its winning probe is the next step's base run)."""
     WORK.mkdir(exist_ok=True)
     results = []
     for name in names:
         base = live_bench.run(name, out=WORK / "base.jsonl")  # the current harness, as the evidence
         live_bench.cleanup_windows()
         time.sleep(2)
-        results.append(improve(name, base))
+        if mode == "sequential":
+            first = base
+            for step in range(k):
+                print(f"  step {step + 1}/{k}", flush=True)
+                r = improve(name, base, 1)
+                if not r["adopted"]:
+                    break  # nothing beat the current harness: refining further has no evidence to work from
+                base = r["probes"][r["adopted"]]
+            results.append({**r, "base": first})
+        else:
+            results.append(improve(name, base, k))
     print("\nsummary:")
     for r in results:
         best = r["probes"].get(r["adopted"]) if r["adopted"] else r["base"]
@@ -235,4 +264,10 @@ def main(names: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:] or list(live_bench.TASKS))
+    import argparse
+    ap = argparse.ArgumentParser(description="Harness² for glimpse: recursive harnessing on the live benchmark")
+    ap.add_argument("tasks", nargs="*", help="benchmark tasks (default: all)")
+    ap.add_argument("--k", type=int, default=1, help="recursion budget (default 1)")
+    ap.add_argument("--mode", choices=("parallel", "sequential"), default="parallel")
+    a = ap.parse_args()
+    main(a.tasks or list(live_bench.TASKS), a.k, a.mode)
