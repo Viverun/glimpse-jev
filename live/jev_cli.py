@@ -95,7 +95,7 @@ def header(prompt: str, target: str, budget: str = "") -> Panel:
     t.append("\nstop    ", style="dim"); t.append(f"{takeover.stop_combo()}  ·  Ctrl+C  ·  touch {STOP_FILE}", style="yellow")
     if budget:
         t.append("\nbudget  ", style="dim"); t.append(budget)
-    return Panel(t, title=f"[bold {ACCENT}]◆ jev[/] [dim]computer use · Luna plans · Jev acts[/]", border_style=ACCENT, padding=(0, 1))
+    return Panel(t, title=f"[bold {ACCENT}]◆ glimpse[/] [dim]computer use · the planner plans · Jev acts[/]", border_style=ACCENT, padding=(0, 1))
 
 
 def bar(p: float, width: int = 10) -> Text:
@@ -224,7 +224,7 @@ def welcome(session: dict) -> Panel:
     t.append(f"{takeover.stop_combo()} stops a running task", style="dim")
     if session["turns"]:
         t.append(f"\n\nresumed “{session['title']}”: {len(session['turns'])} earlier task{'s' * (len(session['turns']) != 1)}", style=ACCENT)
-    return Panel(t, title=f"[bold {ACCENT}]◆ jev[/] [dim]computer use · Luna plans · Jev acts[/]", border_style=ACCENT, padding=(1, 2))
+    return Panel(t, title=f"[bold {ACCENT}]◆ glimpse[/] [dim]computer use · the planner plans · Jev acts[/]", border_style=ACCENT, padding=(1, 2))
 
 
 def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:

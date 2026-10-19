@@ -141,7 +141,7 @@ class Repl:
         interrupted = False
         while True:
             try:
-                text = self.prompt.prompt([("class:prompt", "jev › ")]).strip()
+                text = self.prompt.prompt([("class:prompt", "glimpse › ")]).strip()
                 interrupted = False
             except KeyboardInterrupt:
                 if interrupted:
@@ -231,7 +231,7 @@ class Repl:
         self.console.print(Panel(t if rows else Text(empty), title=f"[bold]{title}[/]", border_style=self.accent, padding=(0, 1)))
 
     def cmd_help(self, rest):
-        self.table("jev commands", [(f"/{n} {h}".rstrip(), d) for n, (h, d) in COMMANDS.items()] +
+        self.table("glimpse commands", [(f"/{n} {h}".rstrip(), d) for n, (h, d) in COMMANDS.items()] +
                    [("!<cmd>", "run a shell command"), ("Alt+Enter", "newline in the prompt"), ("Ctrl+R / ↑", "search / walk history"),
                     (takeover.stop_combo(), "stop a running task, from any window")])
 
@@ -345,7 +345,7 @@ class Repl:
         if not self.session["turns"]:
             self.console.print("[red]nothing to export yet[/]")
             return
-        path = Path(rest).expanduser() if rest else Path.home() / f"jev-{self.session['id']}.md"
+        path = Path(rest).expanduser() if rest else Path.home() / f"glimpse-{self.session['id']}.md"
         path.write_text(sessions.export_markdown(self.session))
         self.say(f"wrote {path}")
 
@@ -392,7 +392,7 @@ class Repl:
         rows.append(("runs", f"{len(past)} remembered, {sum(r['status'] == 'done' for r in past)} done"))
         rows += [(r["time"], Text(f"{'✔' if r['status'] == 'done' else '✘'} {r['task'][:60]}  ({r['seconds']}s)")) for r in past[-5:]]
         rows.append(("sessions", f"{len(sessions.all_sessions())} saved"))
-        self.table("jev memory", rows)
+        self.table("glimpse memory", rows)
 
     def cmd_workflows(self, rest):
         self.table("learned workflows", [(str(i), f"{w['name']}  [dim]({w.get('app') or 'several apps'}, {len(w['steps'])} steps, {w.get('time', '')})[/]")
@@ -430,7 +430,7 @@ class Repl:
 
     def cmd_popups(self, rest):
         if rest == "test":
-            notify.send("jev pop-up test", "A translucent card in the bottom-left corner.", state="done")
+            notify.send("glimpse pop-up test", "A translucent card in the bottom-left corner.", state="done")
             return
         if rest in ("on", "off"):
             self.args.quiet = self.quiet = rest == "off"
@@ -448,7 +448,7 @@ class Repl:
     def cmd_mode(self, rest):
         if rest in ("luna", "jev-only"):
             self.args.jev_only = rest == "jev-only"
-        self.say(f"mode: {'Jev only, no planner' if self.args.jev_only else 'Luna plans, Jev acts'}")
+        self.say(f"mode: {'Jev only, no planner' if self.args.jev_only else 'the planner plans, Jev acts'}")
 
     def cmd_confirm(self, rest):
         if rest in ("on", "off"):
@@ -462,9 +462,9 @@ class Repl:
 
     def cmd_status(self, rest):
         a = self.args
-        self.table("jev status", [
+        self.table("glimpse status", [
             ("session", f"{self.session['title'] or 'new'}  [dim]{self.session['id']}[/]"),
-            ("mode", "Jev only" if a.jev_only else "Luna plans · Jev acts"),
+            ("mode", "Jev only" if a.jev_only else "the planner plans · Jev acts"),
             ("context", f"{context.fill(self.session):.0%} of {context.window():,} tokens · auto-compact at {context.compact_at():.0%}"),
             ("budget", f"{a.max_minutes:g} min · {a.max_steps} steps per task"),
             ("stop key", takeover.stop_combo()),
@@ -500,6 +500,6 @@ class Repl:
             ("system python with GTK3", subprocess.run(["/usr/bin/python3", "-c", "import gi;gi.require_version('Gtk','3.0')"], capture_output=True).returncode == 0,
              "install python3-gi and gir1.2-gtk-3.0"),
         ]
-        self.table("jev doctor", [(Text("✔" if ok else "✘", style="green" if ok else "red"), name if ok else f"{name}  [dim]{fix}[/]") for name, ok, fix in checks])
+        self.table("glimpse doctor", [(Text("✔" if ok else "✘", style="green" if ok else "red"), name if ok else f"{name}  [dim]{fix}[/]") for name, ok, fix in checks])
         if all(ok for _, ok, _ in checks):
-            toast.show("jev doctor", "Everything looks good.", "done", ms=3000)
+            toast.show("glimpse doctor", "Everything looks good.", "done", ms=3000)

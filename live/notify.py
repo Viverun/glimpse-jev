@@ -41,7 +41,7 @@ def send(title: str, body: str = "", state: str = "jev", urgency: str = "normal"
 def started(task: str) -> None:
     global _started, _last_progress
     _started, _last_progress = time.time(), 0.0
-    send("jev is running", task[:140], state="working", expire_ms=4000)
+    send("glimpse is running", task[:140], state="working", expire_ms=4000)
 
 
 def progress(text: str, every_s: float = 30) -> None:

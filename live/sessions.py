@@ -112,7 +112,7 @@ def context(s: dict) -> str:
 
 
 def export_markdown(s: dict) -> str:
-    out = [f"# {s['title'] or 'jev session'}", "", f"Session `{s['id']}`", ""]
+    out = [f"# {s['title'] or 'glimpse session'}", "", f"Session `{s['id']}`", ""]
     for t in s["turns"]:
         mark = "✔" if t["status"] == "done" else "✘"
         out += [f"## {mark} {t['prompt']}", f"*{t['time']} · {t['seconds']} s · {t['status']}*", "", t["report"] or "(no report)", ""]
