@@ -83,6 +83,44 @@ def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
             time.sleep(0.06)
 
 
+def _button(code: str) -> None:
+    subprocess.run(["ydotool", "click", code], env=ENV, capture_output=True)
+
+
+def stroke(points: list[tuple[float, float]], step: float = 4.0) -> None:
+    """Press the left button at the first point, move through all the points (every `step` px, so apps that
+    sample the pointer see a continuous line), and release at the last: a drawn line or a drag."""
+    if not points:
+        return
+    glide(*points[0])
+    time.sleep(0.05)
+    _button("0x40")  # left button down
+    try:
+        x0, y0 = points[0]
+        for x, y in points[1:]:
+            n = max(1, int(math.hypot(x - x0, y - y0) / step))
+            for i in range(1, n + 1):
+                _move(x0 + (x - x0) * i / n, y0 + (y - y0) * i / n)
+                time.sleep(0.004)
+            x0, y0 = x, y
+        time.sleep(0.03)
+    finally:
+        _button("0x80")  # left button up, whatever happened
+    try:
+        STATE.write_text(json.dumps({"x": points[-1][0], "y": points[-1][1]}))
+    except OSError:
+        pass
+
+
+def scroll(clicks: int, at: tuple[float, float] | None = None) -> None:
+    """Turn the wheel: positive = down. Over `at` if given (a scroll goes to what is under the pointer)."""
+    if at:
+        glide(*at)
+    for _ in range(abs(clicks)):
+        subprocess.run(["ydotool", "mousemove", "-w", "-x", "0", "-y", "1" if clicks > 0 else "-1"], env=ENV, capture_output=True)
+        time.sleep(0.03)
+
+
 # --- glimpse's cursor theme ----------------------------------------------------------------------
 def _arrow(size: int):
     """A soft grey arrow with a dark rim and a small ◐ dot in its tail, at `size` pixels."""

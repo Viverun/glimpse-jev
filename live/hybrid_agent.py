@@ -59,6 +59,14 @@ STEP is one of:
   {"do": "type", "text": "..."}                                  type into the focused field (add {"do":"key","key":"enter"} to send/submit;
                                                                  a newline inside text presses Enter, which sends in chat apps)
   {"do": "key", "key": "enter" | "tab" | "ctrl+s" | "ctrl+enter" | ...}
+  {"do": "click", "target": "...", "button": "right"}  /  {"do": "click", "target": "...", "count": 2}   right / double click
+  {"do": "click_at", "x": 0.42, "y": 0.18}                      click a point of the window screenshot (fractions 0-1 of its
+        width and height, read from the image you see); use it when a "click" by description failed once
+  {"do": "drag", "from": [0.2, 0.5], "to": [0.6, 0.5]}           press, move, release (window fractions): drag and drop,
+        sliders, selecting a region, drawing one shape with a shape tool
+  {"do": "draw", "on": "the white drawing canvas", "strokes": [[[0.3, 0.4], [0.5, 0.35], [0.7, 0.4]], ...]}
+        freehand drawing with the real pointer: each stroke is a list of points as fractions 0-1 OF THE "on" AREA
+        (Jev finds it on screen); up to 60 strokes in one step
   {"do": "save_as", "path": "/absolute/path.ext"}                save the current document to exactly this path; the
         format follows the extension (.ods .xlsx .csv .odt .docx .pdf ...; .pdf exports from LibreOffice); opens the Save dialog itself if needed,
         handles format/replace questions, and verifies the file on disk. Use it instead of menus or dialogs.
@@ -83,6 +91,18 @@ missing, not shown, or could not be found, scroll to the end of the page (scroll
 view each round, until the page stops changing), then use the cursor to explore: click every relevant tab, Settings
 page, section, menu, dropdown and "more" control, and hover over unclear items. The answer is often behind a Settings
 tab or menu. Read each view, and only then conclude. Never give up after reading just the first screen.
+WEB PAGES AND CANVAS APPS (the browser shows no element list; you work from the screenshot):
+- Describe a click target by what is visible: its label or icon AND its place, e.g. "the pencil icon, 2nd in the left
+  toolbar" or "the blue Save button at the top right". Never a target that is not on the screenshot.
+- If a "click" by description fails or does nothing once, do not repeat it: use click_at with the point you read from
+  the screenshot. If that also does nothing, the page may need a moment, a scroll, or a closed pop-up/cookie banner.
+- Drawing (paint apps, whiteboards): first select the tool (pencil/brush) and colour, then ONE draw step with all the
+  strokes of the picture, planned from simple shapes (an elephant: a big body ellipse, head circle, trunk curve, four
+  leg rectangles, ear, eye). A closed shape is a stroke whose last point equals its first. Use drag with a shape tool
+  for straight lines, rectangles and ellipses. Draw once, then look; do not redraw what is already there.
+- Prefer one simple, reliable site and stay with it (e.g. https://jspaint.app for paint); do not hop between sites
+  after a small failure. Dismiss pop-ups (Esc or their close button) before working.
+- Use the web app's keyboard shortcuts only when you know them for that app; otherwise click.
 OBEY THE TASK: when it names an app ("in LibreOffice Calc", "in the Files app", "using Zen"), do the work in
 that app. The shell is then read-only (verification only) and writes are refused: never generate or edit the
 deliverable with scripts. If an app step fails, retry it differently in the app.
@@ -100,7 +120,8 @@ instruction: the next part of the goal, or an improvement/fix to what it just pr
 critically). Keep this loop going until the goal is fully met (and, if time-boxed, until time is up).
 If that agent asks for permission or approval (Allow / Yes / Approve / Proceed / "Do you want to..."), approve
 immediately (click the Allow/Yes button, or press enter on Claude Code's "1. Yes" option); don't deliberate.
-open_file, save_as, open_app, focus and goto verify themselves: never add "expect" to them.
+open_file, save_as, open_app, focus and goto verify themselves: never add "expect" to them. After draw, drag,
+click_at and scroll you see the screen in the next round: add "expect" only for a big visible change.
 Use "expect" sparingly, only for big visible state changes later steps rely on (a dialog/menu opened, a form
 filled, a message sent); never for exact status-bar text, cell contents, selection counts or formatting
 (bold/italic/fonts are invisible to the checker: apply formatting ONCE, never re-click a toggle to "fix" it;
@@ -285,7 +306,9 @@ def step_label(s: dict) -> str:
            "key": s.get("key"), "save_as": s.get("path"), "open_app": s.get("name"), "wait": f"{s.get('seconds')} s",
            "wait_until": f"{s.get('fact')} (≤ {s.get('minutes', 5)} min)", "focus": s.get("window"),
            "shell": s.get("cmd"), "open_file": s.get("path"), "read_page": s.get("url"),
-           "scroll": f"{s.get('direction', 'down')} {s.get('pages', 1)} page(s)"}.get(do, "")
+           "scroll": f"{s.get('direction', 'down')} {s.get('pages', 1)} page(s)", "select": s.get("range"),
+           "draw": f"{len(s.get('strokes') or [])} stroke(s) on {s.get('on') or 'the window'}",
+           "drag": f"{s.get('from')} → {s.get('to')}", "click_at": f"({s.get('x')}, {s.get('y')})"}.get(do, "")
     verb = {"goto": "go to", "open_app": "open", "open_file": "open file", "save_as": "save as", "wait_until": "wait until",
             "read_page": "read page"}.get(do, do)
     return f"{verb} › {arg}" if arg else str(verb)
@@ -311,6 +334,7 @@ class HybridAgent(JevAgent):
         self.failures: list[str] = []
         self.task, self._prev_do, self._selected_in, self.looped_once = "", None, set(), False
         self.extra: list[str] = []  # instructions you add while the task runs
+        self.scrolled = 0  # scroll steps taken (reset by run())
         # What changed: snapshots of freshly read trees, the one before the current step, the one Luna last saw.
         self._snap = self._base = self._plan_snap = None
         self._thumb = self._base_thumb = None
@@ -408,34 +432,44 @@ class HybridAgent(JevAgent):
             return None
         return cands[int(a.choice)]
 
-    def visual_click(self, target: str, shot: bytes) -> bool:
-        """Fallback for elements the tree can't place (web content, GTK4): Box on the window screenshot."""
-        from io import BytesIO
+    def to_screen(self, fx: float, fy: float, shot: bytes | None = None) -> tuple[float, float] | None:
+        """A point given as fractions of the window screenshot -> GNOME logical screen pixels. The screenshot is the
+        window, so this works at any resolution or scaling. None if the window's position is unknown."""
+        wb = (self.task_window or {}).get("bounds") or {}
+        if not wb:
+            return None
+        if shot:  # a padded screenshot (tiny windows): fractions of the padded image -> fractions of the window
+            from io import BytesIO
 
-        from PIL import Image as PILImage
+            from PIL import Image as PILImage
+            img = PILImage.open(BytesIO(shot))
+            meta = self._shot_meta or {}
+            fx, fy = fx * img.width / meta.get("width", img.width), fy * img.height / meta.get("height", img.height)
+        if not (0 <= fx <= 1 and 0 <= fy <= 1):
+            return None
+        return wb["x"] + fx * wb["width"], wb["y"] + fy * wb["height"]
+
+    def locate(self, target: str, shot: bytes) -> tuple[float, float, float, float] | None:
+        """Where `target` is on screen (left, top, right, bottom in logical px), found by Jev on the window screenshot."""
         try:
             r = self._t("jev", self.jev.system_one, state={"screen": Image(shot)}, questions={
                 "visible": Noul(instructions=f"Is this visible on `screen`: {target}?"),
                 "box": Box(instructions=f"{target} on `screen`")})
         except Exception:
-            return False
+            return None
         if r.nouls["visible"].noul < 0.5:
-            return False
+            return None
         b = r.answers["box"].box
-        img = PILImage.open(BytesIO(shot))
-        meta = self._shot_meta or {}
-        sx = meta.get("coordinate_width", img.width) / meta.get("width", img.width)
-        sy = meta.get("coordinate_height", img.height) / meta.get("height", img.height)
-        x, y = (b.left + b.right) / 2 * img.width * sx, (b.top + b.bottom) / 2 * img.height * sy
-        wb = self.task_window.get("bounds") or {}
-        w0, h0 = meta.get("width", img.width), meta.get("height", img.height)  # the screenshot before any padding
-        px, py = (b.left + b.right) / 2 * img.width, (b.top + b.bottom) / 2 * img.height
-        if wb and px <= w0 and py <= h0:
-            # The real pointer glides there and clicks. The screenshot is the window, so the box's position in it
-            # scales to the window's logical size: no screen-specific factor, any resolution or scaling works.
-            self._t("act", __import__("cursor").click, wb["x"] + px / w0 * wb["width"], wb["y"] + py / h0 * wb["height"])
-        else:
-            self._t("act", self.d.mcp.call, "click", x=round(x), y=round(y), relative=True, window_id=self.task_window["window_id"])
+        a, z = self.to_screen(b.left, b.top, shot), self.to_screen(b.right, b.bottom, shot)
+        return (a[0], a[1], z[0], z[1]) if a and z else None
+
+    def visual_click(self, target: str, shot: bytes, button: str = "left", count: int = 1) -> bool:
+        """Fallback for elements the tree can't place (web pages, canvases, GTK4): Jev finds the target on the
+        window screenshot, and the real pointer glides there and clicks."""
+        box = self.locate(target, shot)
+        if not box:
+            return False
+        self._t("act", __import__("cursor").click, (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, button, count)
         return True
 
     def observe(self, need_tree: bool = True):
@@ -559,6 +593,44 @@ class HybridAgent(JevAgent):
             except Exception:
                 pass
             time.sleep(0.3)
+
+    def pointer_step(self, s: dict, shot: bytes | None) -> str | None:
+        """click_at / draw / drag: the real pointer, at points read from the screenshot (fractions 0-1)."""
+        import cursor
+        if self.task_window is None:
+            return "no window yet: open or focus one first"
+        self.act({"type": "noop", "label": s["do"]})  # waits while you use the computer (and honours stop)
+        do = s["do"]
+
+        def pt(v, box=None):
+            if not (isinstance(v, (list, tuple)) and len(v) == 2):
+                raise ValueError(f"a point is [x, y] with fractions 0-1, got {v!r}")
+            if box:  # fractions of the target's box
+                return box[0] + float(v[0]) * (box[2] - box[0]), box[1] + float(v[1]) * (box[3] - box[1])
+            p = self.to_screen(float(v[0]), float(v[1]))
+            if p is None:
+                raise ValueError(f"point {v} is outside the window")
+            return p
+        if do == "click_at":
+            x, y = pt([s.get("x"), s.get("y")])
+            self._t("act", cursor.click, x, y, s.get("button", "left"), int(s.get("count", 1)))
+        elif do == "drag":
+            self._t("act", cursor.stroke, [pt(s.get("from")), pt(s.get("to"))], 6.0)
+        elif do == "draw":
+            box = None
+            if s.get("on"):
+                if not shot:
+                    return "no screenshot to find the drawing area on"
+                box = self.locate(s["on"], shot)
+                if not box:
+                    return f"could not find the drawing area '{s['on']}'"
+            strokes = s.get("strokes") or []
+            if not strokes or not all(isinstance(st, list) and len(st) >= 2 for st in strokes):
+                return "draw needs strokes: [[[x, y], [x, y], ...], ...] (each stroke 2+ points, fractions 0-1)"
+            for st in strokes[:60]:
+                self._t("act", cursor.stroke, [pt(v, box) for v in st])
+                time.sleep(0.05)
+        return None
 
     def select_range(self, rng: str) -> str | None:
         """Calc: Name Box (ctrl+shift+F5) -> range -> enter, then CHECK it. A range is confirmed by the status bar
@@ -695,9 +767,11 @@ class HybridAgent(JevAgent):
                 # The UI was still changing (a menu or dialog opening): look again once it is still.
                 els, shot = self.observe(True)
                 el = self.find(target, els, shot)
+            button, count = s.get("button", "left"), int(s.get("count", 1))
+            kind = "right_click" if button == "right" else "double_click" if count == 2 else "click"
             if el:
-                self.act({"type": "click", "el": el, "label": f"click {describe(el)}"})
-            elif not (shot and self.visual_click(target, shot)):
+                self.act({"type": "click", "el": el, "label": f"click {describe(el)}", "kind": kind})
+            elif not (shot and self.visual_click(target, shot, button, count)):
                 return f"could not find '{target}'" + (f"; closest elements: {'; '.join(self.closest)}" if self.closest else "")
         elif do == "type":
             if not self.task_window:
@@ -744,6 +818,8 @@ class HybridAgent(JevAgent):
                 return f"{path} was not written"
         elif do == "select":
             return self.select_range(s.get("range", ""))
+        elif do in ("click_at", "draw", "drag"):
+            return self.pointer_step(s, shot)
         elif do == "open_app":
             return self.open_app(s.get("name", ""))
         elif do == "open_file":
@@ -870,7 +946,10 @@ class HybridAgent(JevAgent):
                     history.append(f"- [claimed done, but verification FAILED: {bad}]")
                     failed_rounds += 1
                     continue
-                if pushbacks < 2 and NOT_FOUND.search(f"{plan.get('report') or ''} {progress}") and (self.scrolled < 3 or rounds < 5):
+                # Only an early give-up (acted, never scrolled, within 3 rounds) is sent back, once: an honest "no
+                # unread messages" after a real look must not cost extra rounds.
+                if (pushbacks < 1 and n > 0 and self.scrolled == 0 and rounds <= 3
+                        and NOT_FOUND.search(f"{plan.get('report') or ''} {progress}")):
                     # Giving up on the first screen: send it back to scroll the whole page and open every tab and section.
                     pushbacks += 1
                     history.append("- [you were about to report that something was NOT FOUND after looking at "
@@ -878,7 +957,6 @@ class HybridAgent(JevAgent):
                                    "(scroll step, page by page), then use the cursor to click through every relevant tab, section, menu, dropdown and "
                                    "Settings page, and read each. "
                                    "Only report not found after all of that]")
-                    failed_rounds += 1
                     continue
                 report = plan.get("report") or report
                 left = (t_end - time.perf_counter()) / 60
@@ -935,7 +1013,7 @@ class HybridAgent(JevAgent):
                 nxt = plan["steps"][i + 1] if i + 1 < len(plan["steps"]) else None
                 typing_next = bool(nxt and nxt.get("do") == "type")
                 looked = bool(s.get("expect") or (nxt and nxt.get("do") in ("click", "double_click"))
-                              or kind in ("open_app", "focus", "goto", "save_as")
+                              or kind in ("open_app", "focus", "goto", "save_as", "click_at", "drag", "draw", "scroll")
                               or (kind in ("click", "double_click") and not typing_next))  # see if the click did anything
                 ok = 1.0
                 try:

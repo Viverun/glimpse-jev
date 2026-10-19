@@ -250,8 +250,10 @@ class JevAgent:
             raise UserPaused("you used the computer: glimpse waited and now looks at the screen again")
         if self.task_window and not self.usable(self.task_window):
             raise BlockedApp(f"refusing to act in {self.task_window.get('title')!r}")
+        if c["type"] == "noop":  # only the pause/stop checks above
+            return c["label"]
         if c["type"] == "click":
-            self._t("act", self.d.click, c["el"], "click", getattr(self, "_els", None))
+            self._t("act", self.d.click, c["el"], c.get("kind", "click"), getattr(self, "_els", None))
         elif c["type"] == "key":
             self._t("act", self.d.key, c["key"], self.task_window)
         elif c["type"] == "macro":

@@ -915,3 +915,48 @@ def test_harness2_sequential_stops_without_evidence(mem, monkeypatch):
     monkeypatch.setattr(h2.time, "sleep", lambda s: None)
     h2.main(["calc_sort"], k=3, mode="sequential")
     assert len(calls) == 2 and calls[1]["plans"] == 1  # step 2 starts from step 1's winner; nothing more to try: stop
+
+
+def _pointer_agent(monkeypatch):
+    import cursor
+    done = []
+    monkeypatch.setattr(cursor, "click", lambda x, y, button="left", count=1: done.append(("click", round(x), round(y), button, count)))
+    monkeypatch.setattr(cursor, "stroke", lambda pts, step=4.0: done.append(("stroke", [(round(x), round(y)) for x, y in pts])))
+    monkeypatch.setattr(cursor, "scroll", lambda n, at=None: done.append(("scroll", n, tuple(round(v) for v in at))))
+    a = make_agent([])
+    del a.step  # the real step
+    a.act = lambda c: c["label"]
+    a.task_window = {"window_id": 1, "title": "paint", "bounds": {"x": 100, "y": 50, "width": 1000, "height": 600}}
+    a._shot_meta = None
+    return a, done
+
+
+def test_pointer_steps_map_screenshot_fractions_to_the_screen(monkeypatch):
+    a, done = _pointer_agent(monkeypatch)
+    assert a.step({"do": "click_at", "x": 0.5, "y": 0.5, "button": "right"}, [], None) is None
+    assert a.step({"do": "drag", "from": [0, 0], "to": [1, 1]}, [], None) is None
+    assert done == [("click", 600, 350, "right", 1), ("stroke", [(100, 50), (1100, 650)])]
+    with pytest.raises(ValueError):
+        a.pointer_step({"do": "click_at", "x": 1.5, "y": 0.2}, None)
+
+
+def test_draw_strokes_are_fractions_of_the_found_area(monkeypatch):
+    a, done = _pointer_agent(monkeypatch)
+    a.locate = lambda target, shot: (200, 100, 600, 500)  # the canvas Jev found, in screen px
+    r = a.step({"do": "draw", "on": "the white canvas", "strokes": [[[0, 0], [0.5, 0.5], [1, 0]]]}, [], b"shot")
+    assert r is None and done == [("stroke", [(200, 100), (400, 300), (600, 100)])]
+    assert a.step({"do": "draw", "on": "canvas", "strokes": [[[0, 0]]]}, [], b"shot").startswith("draw needs strokes")
+    a.locate = lambda target, shot: None
+    assert "could not find the drawing area" in a.step({"do": "draw", "on": "canvas", "strokes": [[[0, 0], [1, 1]]]}, [], b"shot")
+
+
+def test_not_found_is_pushed_back_only_once_and_only_early():
+    """An early give-up is sent back once; an answer given after acting and looking stands."""
+    plans = [{"status": "working", "steps": [{"do": "click", "target": "x"}]},
+             {"status": "done", "report": "I could not find the setting", "steps": []},
+             {"status": "done", "report": "I could not find the setting anywhere", "steps": []}]
+    a = make_agent(plans)
+    r = a.run("find the setting")
+    assert r["status"] == "done" and r["report"] == "I could not find the setting anywhere" and not a.failures
+    honest = make_agent([{"status": "done", "report": "You didn't get any new messages", "steps": []}])
+    assert honest.run("check messages")["report"] == "You didn't get any new messages"  # no action taken: no pushback

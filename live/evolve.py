@@ -40,7 +40,7 @@ Revise the package so the next run of this kind succeeds faster. The package:
 - "steps": the main route, in the planner's step format ({"do": "open_app", ...}); non-fixed values as {VARIABLES}
 - "backup": the alternative route when the main one is blocked (one or two sentences)
 - "recover": rules "if <symptom>, then <action>" for failures seen before (keep the useful old ones)
-Use ONLY these step types: goto(url), click(target), type(text), key(key), save_as(path), select(range),
+Use ONLY these step types: goto(url), click(target), click_at(x, y), drag(from, to), draw(on, strokes), scroll(direction), type(text), key(key), save_as(path), select(range),
 open_app(name), open_file(path, app), focus(window), read_page(url), shell(cmd: read-only checks), wait(seconds),
 wait_until(fact, minutes). Reading the screen and reporting need no step: the planner sees the screen after each step.
 Keep what works. Remove detours the diagnosis names. Never copy this task's specific values (names, numbers, paths)
@@ -49,7 +49,7 @@ Reply with JSON only: {"name": "...", "when": "...", "steps": [...], "backup": "
 "changed": "one line: what you changed and why"}"""
 
 
-STEP_TYPES = {"goto", "click", "type", "key", "save_as", "select", "open_app", "open_file", "focus", "read_page",
+STEP_TYPES = {"goto", "click", "click_at", "drag", "draw", "scroll", "type", "key", "save_as", "select", "open_app", "open_file", "focus", "read_page",
               "shell", "wait", "wait_until"}
 
 

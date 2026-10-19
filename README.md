@@ -9,7 +9,7 @@ Type a task. glimpse does it in your apps, on your screen, checks the result, an
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-5c616a)](LICENSE.md)
 [![Platform: GNOME on Wayland](https://img.shields.io/badge/platform-GNOME%20on%20Wayland-8b9099)](#requirements)
-[![Version 0.3.4](https://img.shields.io/badge/version-0.3.4-d4d7dd)](pyproject.toml)
+[![Version 0.3.5](https://img.shields.io/badge/version-0.3.5-d4d7dd)](pyproject.toml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-8b9099)](pyproject.toml)
 [![Benchmark: 11/11](https://img.shields.io/badge/benchmark-11%2F11%20tasks-a9c4a4)](#benchmark)
 
@@ -215,6 +215,20 @@ Special steps make difficult parts reliable:
 | `select` | Selects a range in LibreOffice Calc and verifies the selection. |
 | `open_file` | Opens a file directly in an app. |
 | `read_page` | Gets the full text of a public web page. |
+| `scroll` | Scrolls the window by pages. |
+| `click_at` | Clicks a point on the screenshot. glimpse uses it when a click by description fails. |
+| `drag` | Pushes the button, moves the pointer and releases it: sliders, drag and drop, shapes. |
+| `draw` | Draws freehand strokes with the real pointer, on an area that Jev finds, for example a canvas. |
+
+### Web pages and drawing
+
+The web browser does not give glimpse a list of controls. Thus glimpse works from the screenshot:
+
+- The planner identifies each control by its label or icon and by its position, for example "the pencil icon, second in the left toolbar".
+- If a click by description fails one time, the planner reads the point from the screenshot and uses `click_at`.
+- To draw, glimpse selects the tool and the color, and then draws the full picture in one `draw` step. It builds the picture from simple shapes.
+- glimpse uses one reliable site for a task (for example [JS Paint](https://jspaint.app) for drawing). It does not change to a different site after a small failure.
+- The pointer moves to each point before it pushes the button, so you can see each action.
 
 ## Memory and learning
 
