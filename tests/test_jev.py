@@ -868,6 +868,9 @@ def test_clear_starts_a_fresh_session(tmp_path, monkeypatch):
     r = repl.Repl.__new__(repl.Repl)
     r.session = {"id": "old", "title": "trip", "turns": [{"prompt": "x"}]}
     r.last = ("x", {})
-    r.console = type("C", (), {"clear": lambda self: None, "print": lambda self, *a, **k: None})()
+    import io
+    out = io.StringIO()
+    r.console = type("C", (), {"file": out, "print": lambda self, *a, **k: None})()
     r.cmd_clear("")
     assert r.session["id"] != "old" and r.session["turns"] == [] and r.last is None
+    assert "\033[3J" in out.getvalue()  # the scrollback is erased too

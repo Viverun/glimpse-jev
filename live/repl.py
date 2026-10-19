@@ -247,7 +247,9 @@ class Repl:
         sessions.save(self.session)
         self.session = sessions.new()
         self.last = None
-        self.console.clear()
+        # Clear the screen AND the scrollback (\033[3J), as the shell's `clear` does: nothing old when you scroll up.
+        self.console.file.write("\033[H\033[2J\033[3J")
+        self.console.file.flush()
         self.console.print(welcome(self.session))
 
     def cmd_new(self, rest):
