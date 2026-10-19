@@ -60,7 +60,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "setup": ("", "connect the planner and Jev: endpoints, keys, models"),
     "glow": ("on|off", "the grey glow around the screen while glimpse works"),
     "doctor": ("", "check that everything jev needs is working"),
-    "clear": ("", "clear the screen"),
+    "clear": ("", "start a fresh session and clear the screen (the old one stays in /resume)"),
     "exit": ("", "leave jev (also /quit, Ctrl+D)"),
 }
 ALIASES = {"quit": "exit", "q": "exit", "bye": "exit", "resume-last": "resume", "flows": "workflows", "taught": "lessons",
@@ -242,7 +242,13 @@ class Repl:
         return "exit"
 
     def cmd_clear(self, rest):
+        """Start over: a fresh session (the old one stays saved for /resume), a clear screen, the welcome."""
+        from jev_cli import welcome
+        sessions.save(self.session)
+        self.session = sessions.new()
+        self.last = None
         self.console.clear()
+        self.console.print(welcome(self.session))
 
     def cmd_new(self, rest):
         sessions.save(self.session)

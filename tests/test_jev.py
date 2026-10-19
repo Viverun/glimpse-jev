@@ -859,3 +859,15 @@ def test_added_instructions_reach_the_planner():
     a.luna = type("L", (), {"chat": type("Chat", (), {"completions": Completions()})()})()
     a.plan("t", [], [], None)
     assert "also save a copy as PDF" in sent["messages"][1]["content"][0]["text"]
+
+
+def test_clear_starts_a_fresh_session(tmp_path, monkeypatch):
+    import repl
+    import sessions
+    monkeypatch.setattr(sessions, "save", lambda s: None)
+    r = repl.Repl.__new__(repl.Repl)
+    r.session = {"id": "old", "title": "trip", "turns": [{"prompt": "x"}]}
+    r.last = ("x", {})
+    r.console = type("C", (), {"clear": lambda self: None, "print": lambda self, *a, **k: None})()
+    r.cmd_clear("")
+    assert r.session["id"] != "old" and r.session["turns"] == [] and r.last is None
