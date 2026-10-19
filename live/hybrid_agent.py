@@ -1050,6 +1050,10 @@ class HybridAgent(JevAgent):
                               "window": (self.task_window or {}).get("title", ""), "ms": self._step_ms()})
                 quiet = not err and kind in ("click", "double_click") and (
                     self.unchanged() if looked else typing_next and clicked_nothing)
+                if quiet and nxt and not typing_next:
+                    # The next steps act on what this click should have done (select, open, focus): running them on
+                    # nothing wastes the whole chunk. Stop here and replan from what the screen shows.
+                    err = "the click had no visible effect (the element may not be clickable this way): try another way"
                 history.append(f"- {label}: " + (f"FAILED ({err})" if err else f"expected {s['expect']} not seen" if ok < 0.5 else
                                                  "done, but NOTHING visibly changed (the click may not have worked)" if quiet else "ok")
                                + (f"\n  what changed: {self.last_change[:400]}" if (err or ok < 0.5) and self.last_change else ""))

@@ -443,7 +443,8 @@ def test_three_actions_without_effect_fail_the_chunk():
     a = make_agent(plans)
     a.unchanged = lambda: True
     a.run("t")
-    assert a.failures == ["click › b2: the last 3 actions changed nothing on screen"]
+    # The first click that changes nothing already stops the chunk (the next steps would act on nothing).
+    assert a.failures == ["click › b0: the click had no visible effect (the element may not be clickable this way): try another way"]
 
 
 @pytest.mark.parametrize("score,confirm,done", [(0.7, 0.0, True), (0.5, 0.7, True), (0.5, 0.5, False), (0.2, 0.9, False)])
@@ -978,3 +979,15 @@ def test_browsers_start_with_accessibility(tmp_path, monkeypatch):
     assert browsers.launch_command("zen") == ["gtk-launch", "zen"]
     e = browsers.env()
     assert e["GNOME_ACCESSIBILITY"] == "1" and e["ACCESSIBILITY_ENABLED"] == "1"
+
+
+def test_a_click_that_changes_nothing_stops_the_chunk():
+    plans = [{"status": "working", "steps": [{"do": "click", "target": "notes.txt"}, {"do": "key", "key": "ctrl+x"}]},
+             {"status": "done", "report": "r", "steps": []}]
+    a = make_agent(plans)
+    a.unchanged = lambda: True
+    ran = []
+    orig = a.step
+    a.step = lambda s, els, shot: (ran.append(s["do"]), orig(s, els, shot))[1]
+    a.run("t")
+    assert ran == ["click"] and "no visible effect" in a.failures[0]  # ctrl+x never ran on nothing
