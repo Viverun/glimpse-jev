@@ -241,8 +241,9 @@ def is_read_only(cmd: str) -> bool:
     return ">" not in shell and not WRITES.search(re.sub(r"<<-?\s*'?\w+'?", " ", cmd))
 
 
-def run_shell(cmd: str, timeout: float = 60, read_only: bool = False) -> tuple[str, str | None]:
-    """Run a planner shell command; returns (output tail, error or None). Destructive commands are refused."""
+def run_shell(cmd: str, timeout: float = 60, read_only: bool = False, remote=None) -> tuple[str, str | None]:
+    """Run a planner shell command; returns (output tail, error or None). Destructive commands are refused.
+    `remote(cmd, timeout) -> (output, returncode)` runs it elsewhere (the OSWorld VM) after the same checks."""
     if not cmd.strip():
         return "", "empty command"
     if DANGEROUS.search(cmd) or not _rm_ok(cmd):
@@ -250,6 +251,10 @@ def run_shell(cmd: str, timeout: float = 60, read_only: bool = False) -> tuple[s
     if read_only and not is_read_only(cmd):
         return "", ("refused: the task names an app, so the shell is read-only (checks only). "
                     "Do the work in the app itself; use the shell only to verify.")
+    if remote is not None:
+        out, rc = remote(cmd, timeout)
+        out = (out or "").strip()[-4000:]
+        return out or "(no output)", None if rc == 0 else f"exit {rc}: {out[-200:]}"
     try:
         r = subprocess.run(["bash", "-lc", cmd], capture_output=True, text=True, timeout=timeout, cwd=str(Path.home()))
     except subprocess.TimeoutExpired:
@@ -610,7 +615,7 @@ class HybridAgent(JevAgent):
         cmd = plan.get("verify")
         if not isinstance(cmd, str) or not cmd.strip():
             return None
-        out, err = run_shell(cmd)
+        out, err = run_shell(cmd, remote=getattr(self.d, "shell", None))
         self.on_step({"step": "✓", "label": f"verify › {cmd[:90]}" + ("" if not err else "  ✘"), "conf": 0.0 if err else 1.0,
                       "done": 0.0, "window": "", "ms": self._step_ms()})
         return None if not err else f"`{cmd}` -> {err[:300]}"
@@ -732,7 +737,7 @@ class HybridAgent(JevAgent):
             cmd = ["gtk-launch", did, path]
         else:
             cmd = ["xdg-open", path]
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=config.app_env())
+        self._launch(cmd)
         name = Path(path).name
         for i in range(50):
             time.sleep(0.4)
@@ -755,14 +760,12 @@ class HybridAgent(JevAgent):
         return f"{name} did not open in a window"
 
     def open_app(self, name: str) -> str | None:
-        import subprocess
         key = name.lower()
         did = self.apps.get(key) or next((d for n, d in self.apps.items() if key in n or n in key), None)
         if not did:
             return f"no installed app named '{name}'"
         before = {w["window_id"] for w in self.d.windows()}
-        subprocess.Popen(browsers.launch_command(did), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True, env=config.app_env())
+        self._launch(browsers.launch_command(did))
         for i in range(24):
             time.sleep(0.5)
             wins = self.d.windows()
@@ -776,6 +779,13 @@ class HybridAgent(JevAgent):
                 self.wait_ready(self.task_window)
                 return None
         return f"'{name}' did not open a window"
+
+    def _launch(self, cmd: list[str]) -> None:
+        """Start an app: on this desktop, or inside the OSWorld VM when that is the desktop."""
+        if hasattr(self.d, "launch"):
+            self.d.launch(cmd, config.app_env())
+        else:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=config.app_env())
 
     def step(self, s: dict, els: list[dict], shot: bytes | None) -> str | None:
         """Run one planned step. Returns a failure reason, or None."""
@@ -892,7 +902,7 @@ class HybridAgent(JevAgent):
             if text.startswith("(could not"):
                 return text
         elif do == "shell":
-            out, err = run_shell(s.get("cmd", ""), read_only=self.read_only_shell)
+            out, err = run_shell(s.get("cmd", ""), read_only=self.read_only_shell, remote=getattr(self.d, "shell", None))
             self.shell_log.append(f"$ {s.get('cmd', '')}\n{out}")
             if err:
                 return err
