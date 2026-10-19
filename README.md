@@ -26,6 +26,7 @@ This document uses Simplified Technical English (ASD-STE100).
 - [Teach glimpse a skill](#teach-glimpse-a-skill)
 - [Repository layout](#repository-layout)
 - [Limitations](#limitations)
+- [License](#license)
 
 ## What glimpse can do
 
@@ -283,3 +284,15 @@ Write variable parts as `{NAME}`. The planner copies examples exactly, so do not
 - LibreOffice has large accessibility trees. Some steps in Calc take approximately 4 seconds for a full read.
 - The benchmark results come from one machine and one run of each task.
 - `live/run_live.py` is an old demo. It needs an `agent_src` folder that is not in this repository.
+
+## License
+
+glimpse-jev uses the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
+
+You can use, change and share glimpse for noncommercial purposes. Examples are personal use, study, research,
+hobby projects, and use by charities, schools and public organizations.
+
+You cannot use glimpse or share it for a commercial purpose. Do not sell it, and do not use it in a product or a
+service that earns money. For commercial use, ask the author for a different license.
+
+Copyright 2026 Viverun.
