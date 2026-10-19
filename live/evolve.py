@@ -49,7 +49,7 @@ Reply with JSON only: {"name": "...", "when": "...", "steps": [...], "backup": "
 "changed": "one line: what you changed and why"}"""
 
 
-STEP_TYPES = {"goto", "click", "click_at", "drag", "draw", "scroll", "type", "key", "save_as", "select", "open_app", "open_file", "focus", "read_page",
+STEP_TYPES = {"goto", "click", "click_at", "fileop", "drag", "draw", "scroll", "type", "key", "save_as", "select", "open_app", "open_file", "focus", "read_page",
               "shell", "wait", "wait_until"}
 
 

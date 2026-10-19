@@ -77,7 +77,7 @@ class LibreOfficeSave:
                         break
                 else:
                     return f"the {'Export' if pdf else 'Save'} dialog did not open"
-        tree = self._tree(dlg)
+        tree = self._tree(dlg, 150)  # small: the name field is near the top; a 2000-node read cost ~4-5 s
         # File type from the extension (menu items of the type combo); keep whatever is set if unknown.
         want = FORMATS.get(p.suffix.lower())
         if want:
@@ -87,7 +87,7 @@ class LibreOfficeSave:
             if item:
                 self.d.mcp.call("perform_action", element_index=item["index"])
                 time.sleep(0.3)
-                tree = self._tree(dlg)
+                tree = self._tree(dlg, 150)  # small: the name field is near the top; a 2000-node read cost ~4-5 s
         field = next((e for e in tree if e.get("role") in ("text", "text box", "entry")
                       and "editable" in (e.get("states") or []) and "focused" in (e.get("states") or [])), None) \
             or next((e for e in tree if e.get("role") in ("text", "text box", "entry") and "editable" in (e.get("states") or [])), None)
@@ -97,14 +97,15 @@ class LibreOfficeSave:
         time.sleep(0.2)
         self.d.key("enter", dlg)
         # Possible follow-ups: "file exists, replace?" and "keep current format?".
-        for _ in range(16):
-            time.sleep(0.4)
+        for _ in range(40):
+            time.sleep(0.2)
             if p.exists() and p.stat().st_mtime != before and (self._focused() or {}).get("title") not in DIALOGS:
                 return None
             f = self._focused()
-            if not f or not is_libreoffice(f):
+            if not f or not is_libreoffice(f) or " — LibreOffice" in (f.get("title") or ""):
+                # Only a question dialog needs reading; the document window's tree costs ~1 s per read.
                 continue
-            names = {(e.get("name") or "").replace("’", "'"): e for e in self._tree(f, 400)
+            names = {(e.get("name") or "").replace("’", "'"): e for e in self._tree(f, 200)
                      if e.get("role") in ("button", "push button")}
             pick = None
             if "Replace" in names:

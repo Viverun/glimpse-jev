@@ -133,6 +133,25 @@ def record(task: str, status: str, ok_steps: list[dict], failures: list[str], se
     return report
 
 
+def exact_repeat(task: str) -> list[dict]:
+    """Steps to replay without the planner: the most recent run of the SAME task (same words) that finished cleanly
+    (done, no failures, one planning round). Empty when there is none, or JEV_NO_REPLAY=1."""
+    import os
+    if os.environ.get("JEV_NO_REPLAY"):
+        return []
+    norm = " ".join(task.lower().split())
+    for r in reversed(runs(2000)):
+        if " ".join(r["task"].lower().split()) != norm:
+            continue
+        # One planning round and no failures: the steps are exactly the route that worked, with no detour or fix
+        # in them (a failed check is not a step failure, so a 2+ round run can hide a wrong first try).
+        clean = r["status"] == "done" and not r.get("failures") and (r.get("plans") or 1) <= 1
+        steps = [x for x in r.get("steps") or [] if x.get("do") not in ("wait", "shell", "read_page")]
+        if clean and steps:  # the most recent CLEAN run: one messy run does not erase a known-good recipe
+            return steps
+    return []
+
+
 # --- learning: categories, learnability, improvement ----------------------------------------------
 CATEGORIES = {
     "spreadsheet": "spreadsheets: tables, cells, formulas, sorting, charts (LibreOffice Calc...)",

@@ -83,6 +83,10 @@ STEP is one of:
   {"do": "read_page", "url": "https://..."}     full text of a PUBLIC page you opened (shown to you next round);
         the browser exposes no page text, and the screenshot shows only the visible part. Not for logged-in pages.
   {"do": "shell", "cmd": "ls -la ~/glimse-demo", "expect_ok": true}          run a shell command (bash, 60 s max)
+  {"do": "fileop", "op": "move" | "copy" | "rename" | "mkdir" | "trash", "src": "~/a.txt", "dst": "~/docs/"}
+        fast, exact file work (GNOME's gio), shown in Files afterwards. Use it for file tasks that do NOT name an app;
+        when the task names the Files app, work in Files. It never overwrites (add "overwrite": true only when the
+        task asks), never leaves your home folder, and "trash" moves to the trash (nothing is deleted).
 CONVERSATION: if the context lists earlier turns of this session, the task is the NEW message after them. Words like
 "last command", "what I asked before", "that", "it", "again", "the same" refer to entries in that list (the "last
 command" is the one named by "Most recent earlier message"), never to the task itself. When the task only asks about the session or earlier tasks ("what was my last command?", "what did you
@@ -336,6 +340,8 @@ class HybridAgent(JevAgent):
         self.task, self._prev_do, self._selected_in, self.looped_once = "", None, set(), False
         self.extra: list[str] = []  # instructions you add while the task runs
         self.scrolled = 0  # scroll steps taken (reset by run())
+        self.replay: list[dict] = []  # steps of an identical earlier task to run first (set by the CLI)
+        self.replayed = False
         # What changed: snapshots of freshly read trees, the one before the current step, the one Luna last saw.
         self._snap = self._base = self._plan_snap = None
         self._thumb = self._base_thumb = None
@@ -843,6 +849,13 @@ class HybridAgent(JevAgent):
             self.d.mcp.call("scroll", window_id=w["window_id"], direction=s.get("direction", "down"),
                             pages=min(max(float(s.get("pages", 1) or 1), 0.5), 10))
             time.sleep(0.6)
+        elif do == "fileop":
+            if self.read_only_shell:
+                return "fileop is off: the task names an app, so do the file work in that app"
+            import fileops
+            err = fileops.run(s)
+            if err:
+                return err
         elif do == "read_page":
             text = self._t("read_page", fetch_text, s.get("url", ""))
             self.shell_log.append(f"[full text of {s.get('url')}]\n{text}")
@@ -927,7 +940,14 @@ class HybridAgent(JevAgent):
                 note.append("Shell output since last round:\n" + "\n".join(self.shell_log)[-6000:])
                 self.shell_log = []
             try:
-                plan = self.plan(task + ("\n\n" + "\n".join(note) if note else ""), history, els, shot)
+                if rounds == 1 and self.replay:
+                    # The same task finished cleanly before: run its steps without a planning call. The planner sees
+                    # the result next round (to confirm or finish), and takes over at once if a replayed step fails.
+                    plan = {"status": "working", "steps": self.replay, "progress": "Replaying the steps that finished this same task before."}
+                    history.append("- [replayed the steps of an earlier identical task, without planning]")
+                    self.replayed = True
+                else:
+                    plan = self.plan(task + ("\n\n" + "\n".join(note) if note else ""), history, els, shot)
             except RuntimeError as e:
                 status = f"error: {e}"
                 break

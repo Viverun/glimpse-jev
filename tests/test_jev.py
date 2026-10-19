@@ -1014,3 +1014,42 @@ def test_setup_skips_browser_restart_when_all_ready(monkeypatch):
     con = type("C", (), {"print": lambda self, *a, **k: None, "input": lambda self, *a, **k: asked.append(1) or "y"})()
     setup_wizard.restart_unready_browsers(con)
     assert not asked
+
+
+def test_fileop_guards_and_operations(tmp_path, monkeypatch):
+    import fileops
+    monkeypatch.setattr(fileops.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(fileops, "show", lambda paths: None)
+    monkeypatch.setattr(fileops, "_gio", lambda *a: (Path(a[-1]).write_text("x") if a[0] == "copy" else
+                                                      Path(a[-2]).rename(a[-1]) if a[0] == "move" else None) and None)
+    (tmp_path / "a.txt").write_text("hi")
+    assert fileops.run({"op": "mkdir", "dst": str(tmp_path / "docs")}) is None and (tmp_path / "docs").is_dir()
+    assert fileops.run({"op": "copy", "src": str(tmp_path / "a.txt"), "dst": str(tmp_path / "docs")}) is None
+    assert "already exists" in fileops.run({"op": "copy", "src": str(tmp_path / "a.txt"), "dst": str(tmp_path / "docs")})
+    assert fileops.run({"op": "rename", "src": str(tmp_path / "a.txt"), "dst": "b.txt"}) is None and (tmp_path / "b.txt").exists()
+    assert "outside your home" in fileops.run({"op": "copy", "src": str(tmp_path / "b.txt"), "dst": "/etc/x"})
+    assert "unknown fileop" in fileops.run({"op": "delete", "src": str(tmp_path / "b.txt")})
+
+
+def test_fileop_is_off_when_the_task_names_an_app():
+    a = make_agent([])
+    del a.step
+    a.read_only_shell = True
+    assert a.step({"do": "fileop", "op": "mkdir", "dst": "~/x"}, [], None).startswith("fileop is off")
+
+
+def test_identical_clean_task_is_replayed_without_the_planner(mem):
+    memory.record("sort sales.csv by price", "done", [{"do": "open_file", "path": "s.csv"}, {"do": "wait"}, {"do": "select", "range": "C2"}],
+                  [], 20, plans=1)
+    assert memory.exact_repeat("Sort  sales.csv by PRICE") == [{"do": "open_file", "path": "s.csv"}, {"do": "select", "range": "C2"}]
+    memory.record("flaky task", "done", [{"do": "click"}], ["x failed"], 50, plans=5)
+    assert memory.exact_repeat("flaky task") == []          # never clean: the planner decides
+    memory.record("sort sales.csv by price", "done", [{"do": "click"}], ["oops"], 90, plans=6)
+    assert memory.exact_repeat("sort sales.csv by price")[0]["do"] == "open_file"  # a messy run keeps the good recipe
+    plans_called = []
+    a = make_agent([{"status": "done", "report": "confirmed", "steps": []}])
+    orig = a.plan
+    a.plan = lambda *x, **k: (plans_called.append(1), orig(*x, **k))[1]
+    a.replay = [{"do": "key", "key": "a"}]
+    r = a.run("t")
+    assert r["status"] == "done" and r["steps"] == 1 and len(plans_called) == 1  # replay ran, then one planner call

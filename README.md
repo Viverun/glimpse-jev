@@ -9,7 +9,7 @@ Type a task. glimpse does it in your apps, on your screen, checks the result, an
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-5c616a)](LICENSE.md)
 [![Platform: GNOME on Wayland](https://img.shields.io/badge/platform-GNOME%20on%20Wayland-8b9099)](#requirements)
-[![Version 0.3.10](https://img.shields.io/badge/version-0.3.10-d4d7dd)](pyproject.toml)
+[![Version 0.3.11](https://img.shields.io/badge/version-0.3.11-d4d7dd)](pyproject.toml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-8b9099)](pyproject.toml)
 [![Benchmark: 11/11](https://img.shields.io/badge/benchmark-11%2F11%20tasks-a9c4a4)](#benchmark)
 
@@ -251,6 +251,7 @@ Special steps make difficult parts reliable:
 | `click_at` | Clicks a point on the screenshot. glimpse uses it when a click by description fails. |
 | `drag` | Pushes the button, moves the pointer and releases it: sliders, drag and drop, shapes. |
 | `draw` | Draws freehand strokes with the real pointer, on an area that Jev finds, for example a canvas. |
+| `fileop` | Moves, copies, renames, trashes or makes files and folders with GNOME's `gio`, and then shows the result in Files. It never overwrites unless the task asks, never goes outside your home folder, and "trash" moves to the trash. It is off when the task names an app: then glimpse does the work in that app. |
 
 ### Web pages and drawing
 
@@ -289,6 +290,10 @@ When a task fails, repeats actions or is slow, glimpse improves the skill for th
 3. **Reuse.** The next similar task gets the revised skill.
 Before a new task, Jev selects the best workflow and the best past task, and the planner gets them.
 If a past task was slow, glimpse gives only its workflow, not the slow steps.
+
+When you give the same task again, glimpse replays the steps of the last run that finished in one plan with no
+failures, without a planning call. Then the planner examines the screen one time to confirm the result. If a
+replayed step fails, the planner continues from the screen. Set `JEV_NO_REPLAY=1` to turn replay off.
 
 glimpse keeps its memory in `~/.config/jev/`:
 

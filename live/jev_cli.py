@@ -404,6 +404,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
                 standing = "\n\n".join(x for x in (memory.notes_text(), sessions.context(session) if session else "") if x)
                 agent.context = (standing + "\n\n" if standing else "") + (habits + "\n" if habits else "") + (memory.desktop_context(args.prompt, prof, (target or {}).get("app_id") or (f"{guess[1]}.desktop" if guess else None))
                                  + hint + "\n\n" + memory.recall(agent.jev, args.prompt))
+                agent.replay = memory.exact_repeat(args.prompt)  # done cleanly before: replay, then the planner confirms
                 memory.LAST_WORKFLOW = ""
                 flow = memory.workflows_for(agent.jev, args.prompt)
                 if flow:
