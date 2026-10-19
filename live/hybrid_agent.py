@@ -421,7 +421,12 @@ class HybridAgent(JevAgent):
         sx = meta.get("coordinate_width", img.width) / meta.get("width", img.width)
         sy = meta.get("coordinate_height", img.height) / meta.get("height", img.height)
         x, y = (b.left + b.right) / 2 * img.width * sx, (b.top + b.bottom) / 2 * img.height * sy
-        self._t("act", self.d.mcp.call, "click", x=round(x), y=round(y), relative=True, window_id=self.task_window["window_id"])
+        wb = self.task_window.get("bounds") or {}
+        if wb:  # the real pointer glides there and clicks (window screenshot space -> GNOME logical px)
+            from a11y_agent import CLICK_SCALE
+            self._t("act", __import__("cursor").click, wb["x"] + x / CLICK_SCALE, wb["y"] + y / CLICK_SCALE)
+        else:
+            self._t("act", self.d.mcp.call, "click", x=round(x), y=round(y), relative=True, window_id=self.task_window["window_id"])
         return True
 
     def observe(self, need_tree: bool = True):

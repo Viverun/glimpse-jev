@@ -627,13 +627,16 @@ def test_slash_commands_all_have_handlers_and_legacy_words_route():
 @pytest.mark.parametrize("role,actions,expect", [
     ("button", [{"name": ""}], ("perform_action", "button", None)),             # LibreOffice toolbar button: its unnamed action
     ("push button", [{"name": "Click"}], ("perform_action", "push button", "Click")),
-    ("menu item", [{"name": ""}], ("click", None, None)),                       # ghost menu item: never its unnamed action
-    ("button", [], ("click", None, None)),                                      # no action at all: pointer click
+    ("menu item", [{"name": ""}], ("pointer", "left", 1)),                      # ghost menu item: never its unnamed action
+    ("button", [], ("pointer", "left", 1)),                                     # no action: the real pointer clicks
 ])
 def test_click_uses_working_accessibility_actions(monkeypatch, role, actions, expect):
     import a11y_agent
     calls = []
+    import cursor
     monkeypatch.setattr(a11y_agent.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(cursor, "glide", lambda x, y: None)
+    monkeypatch.setattr(cursor, "click", lambda x, y, button="left", count=1: calls.append(("pointer", button, count)))
     d = a11y_agent.Desktop.__new__(a11y_agent.Desktop)
     d.mcp = type("M", (), {"call": lambda self, tool, **a: calls.append((tool, a.get("role"), a.get("action")))})()
     el = {"role": role, "name": "Sort Descending", "actions": actions, "abs": {"x": 10, "y": 10, "width": 20, "height": 20}}

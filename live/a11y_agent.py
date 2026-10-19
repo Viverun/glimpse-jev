@@ -136,8 +136,7 @@ class Desktop:
         b = element["abs"]
         cx, cy = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
         x, y = round(cx * CLICK_SCALE), round(cy * CLICK_SCALE)
-        subprocess.run(["ydotool", "mousemove", "--absolute", "-x", str(round(cx)), "-y", str(round(cy))],
-                       env=YDOTOOL_ENV, capture_output=True)  # visible cursor move, GNOME logical px
+        __import__("cursor").glide(cx, cy)  # the pointer goes there first; an accessibility action fires as it arrives
         names = [a.get("name", "").lower() for a in element.get("actions") or []]
         primary = next((i for i, n in enumerate(names) if n in ("click", "press", "activate", "toggle", "jump", "open")), None)
         if primary is None and names and not any(names) and element.get("role") in ("button", "push button", "toggle button"):
@@ -157,12 +156,8 @@ class Desktop:
             if fresh is not None:
                 self.mcp.call("perform_action", element_index=fresh["index"], action=action)
                 return x, y
-        args = {"x": x, "y": y}
-        if kind == "double_click":
-            args["click_count"] = 2
-        elif kind == "right_click":
-            args["button"] = "right"
-        self.mcp.call("click", **args)
+        # No working accessibility action: the pointer that just glided there does the click itself.
+        __import__("cursor").click(cx, cy, "right" if kind == "right_click" else "left", 2 if kind == "double_click" else 1)
         return x, y
 
     def _relocate(self, element: dict) -> dict | None:

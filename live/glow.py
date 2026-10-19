@@ -25,8 +25,16 @@ def start() -> subprocess.Popen | None:
     """Show the glow until stop(). None if it cannot be shown (no XWayland display, GLIMPSE_NO_GLOW set...)."""
     if os.environ.get("GLIMPSE_NO_GLOW") or not os.environ.get("DISPLAY"):
         return None
+    restore = ""
+    if not os.environ.get("GLIMPSE_NO_CURSOR"):
+        try:  # glimpse's own cursor while it works; the daemon puts yours back when the glow ends
+            import cursor
+            restore = cursor.current_theme()
+            cursor.set_theme(cursor.install_theme(restore))
+        except Exception:
+            restore = ""
     try:
-        return subprocess.Popen(["/usr/bin/python3", __file__, "--daemon", str(os.getpid())],
+        return subprocess.Popen(["/usr/bin/python3", __file__, "--daemon", str(os.getpid()), restore],
                                 env={**os.environ, "GDK_BACKEND": "x11"}, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError:
@@ -38,7 +46,7 @@ def stop(proc: subprocess.Popen | None) -> None:
         proc.terminate()  # fades out in ~0.4 s, then exits
 
 
-def daemon(parent: int) -> None:
+def daemon(parent: int, restore_cursor: str = "") -> None:
     import math
 
     import cairo
@@ -116,12 +124,16 @@ def daemon(parent: int) -> None:
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: ending.__setitem__(0, ending[0] or time.monotonic()) or True)
     GLib.timeout_add(33, tick)
     GLib.timeout_add(1000, alive)
-    Gtk.main()
+    try:
+        Gtk.main()
+    finally:
+        if restore_cursor and restore_cursor != "glimpse-cursor":  # your own cursor back
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", restore_cursor], capture_output=True)
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--daemon":
-        daemon(int(sys.argv[2]))
+        daemon(int(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
     else:
         p = start()
         time.sleep(6)
