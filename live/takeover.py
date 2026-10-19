@@ -121,6 +121,7 @@ class Takeover:
 
     def __exit__(self, *exc):
         self._stop.set()
+        self._signal_pause(0.0)
         time.sleep(0.05)
         for fd in list(self._fds):
             try:
@@ -138,6 +139,21 @@ class Takeover:
     def resume(self) -> None:
         """You said continue: act again now."""
         self.last_input = 0.0
+        self._signal_pause(0.0)
+
+    def _input(self) -> None:
+        """You used the keyboard or the pointer: pause, and show it (the glow turns red)."""
+        self.last_input = time.monotonic()
+        if time.time() - getattr(self, "_signalled", 0.0) > 0.5:  # at most two file writes a second
+            self._signal_pause(time.time() + PAUSE_SECONDS)
+
+    def _signal_pause(self, until: float) -> None:
+        self._signalled = time.time()
+        try:
+            import glow
+            glow.set_paused_until(until)
+        except Exception:
+            pass
 
     @property
     def watching(self) -> list[str]:
@@ -163,12 +179,13 @@ class Takeover:
                     if typ in (EV_REL, EV_ABS):  # the pointer moved: a few events, not one stray one
                         motion[fd] = motion.get(fd, 0) + 1
                         if motion[fd] >= 3:
-                            self.last_input, motion[fd] = time.monotonic(), 0
+                            self._input()
+                            motion[fd] = 0
                         continue
                     if typ != EV_KEY or value == 2:  # auto-repeat changes nothing
                         continue
                     if value == 1:
-                        self.last_input = time.monotonic()
+                        self._input()
                     held.add(code) if value else held.discard(code)
                     if time.monotonic() - self._t0 >= self.grace and all(held & set(codes) for codes in self.combo):
                         if self._stop.is_set():  # disarmed meanwhile: the run already ended

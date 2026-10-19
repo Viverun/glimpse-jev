@@ -15,7 +15,26 @@ import sys
 import time
 
 DEPTH = 34          # glow depth in logical pixels
-COLOR = (0.78, 0.80, 0.84)  # cool grey
+COLOR = (0.78, 0.80, 0.84)  # cool grey: glimpse is working
+PAUSED = (0.92, 0.38, 0.38)  # soft red: glimpse is paused because you are using the computer
+STATE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "glimpse-paused-until")
+
+
+def set_paused_until(t: float) -> None:
+    """Tell the glow until when glimpse is paused (wall-clock time; 0 = not paused)."""
+    try:
+        with open(STATE, "w") as f:
+            f.write(f"{t:.2f}")
+    except OSError:
+        pass
+
+
+def paused_now() -> bool:
+    try:
+        with open(STATE) as f:
+            return time.time() < float(f.read() or 0)
+    except (OSError, ValueError):
+        return False
 PEAK = 0.42         # alpha at the very edge
 BREATH = 3.2        # seconds per breath
 LOW, HIGH = 0.55, 1.0  # opacity range of a breath
@@ -60,7 +79,7 @@ def daemon(parent: int, restore_cursor: str = "") -> None:
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
-        r, g, b = COLOR
+        r, g, b = PAUSED if paused[0] else COLOR
         for x0, y0, x1, y1 in ((0, 0, 0, DEPTH), (0, h, 0, h - DEPTH), (0, 0, DEPTH, 0), (w, 0, w - DEPTH, 0)):
             grad = cairo.LinearGradient(x0, y0, x1, y1)
             grad.add_color_stop_rgba(0.0, r, g, b, PEAK)
@@ -78,7 +97,7 @@ def daemon(parent: int, restore_cursor: str = "") -> None:
         cr.stroke()
         return False
 
-    wins = []
+    wins, paused = [], [False]
     disp = Gdk.Display.get_default()
     for i in range(disp.get_n_monitors()):
         geo = disp.get_monitor(i).get_geometry()
@@ -99,6 +118,14 @@ def daemon(parent: int, restore_cursor: str = "") -> None:
         wins.append(win)
 
     born, ending = time.monotonic(), [None]
+
+    def watch_pause():
+        now = paused_now()
+        if now != paused[0]:
+            paused[0] = now
+            for w in wins:
+                w.queue_draw()  # repaint in red (paused) or grey (working)
+        return True
 
     def tick():
         now = time.monotonic()
@@ -123,6 +150,7 @@ def daemon(parent: int, restore_cursor: str = "") -> None:
 
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: ending.__setitem__(0, ending[0] or time.monotonic()) or True)
     GLib.timeout_add(33, tick)
+    GLib.timeout_add(150, watch_pause)
     GLib.timeout_add(1000, alive)
     try:
         Gtk.main()

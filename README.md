@@ -9,7 +9,7 @@ Type a task. glimpse does it in your apps, on your screen, checks the result, an
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-5c616a)](LICENSE.md)
 [![Platform: GNOME on Wayland](https://img.shields.io/badge/platform-GNOME%20on%20Wayland-8b9099)](#requirements)
-[![Version 0.3.0](https://img.shields.io/badge/version-0.3.0-d4d7dd)](pyproject.toml)
+[![Version 0.3.1](https://img.shields.io/badge/version-0.3.1-d4d7dd)](pyproject.toml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-8b9099)](pyproject.toml)
 [![Benchmark: 11/11](https://img.shields.io/badge/benchmark-11%2F11%20tasks-a9c4a4)](#benchmark)
 
@@ -171,7 +171,7 @@ While glimpse works:
 
 - A soft grey light glows around the edges of the screen. Type `/glow off` to turn it off.
 - Notifications show in the top-right corner of the screen.
-- If you use the keyboard or the touchpad, glimpse pauses for 10 seconds after your last input. Then it looks at the screen again and continues. Type `continue` to continue sooner.
+- If you use the keyboard or the touchpad, glimpse pauses for 10 seconds after your last input, and the light at the edges changes to red. Then glimpse looks at the screen again and continues, and the light changes back to grey. Type `continue` to continue sooner.
 - To give more instructions, type them in the glimpse terminal and push Enter. glimpse uses them from its next plan. Type `stop` to stop.
 - The pointer changes to the glimpse cursor ◐ and moves smoothly to each target before it clicks. Your cursor comes back when the task stops.
 
