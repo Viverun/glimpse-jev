@@ -519,7 +519,7 @@ class Repl:
             ("display for pop-ups", bool(os.environ.get("DISPLAY")), "XWayland provides DISPLAY on GNOME"),
             ("system python with GTK3", subprocess.run(["/usr/bin/python3", "-c", "import gi;gi.require_version('Gtk','3.0')"], capture_output=True).returncode == 0,
              "install python3-gi and gir1.2-gtk-3.0"),
-        ]
+        ] + [c for c in __import__("setup_wizard").desktop_checks() if c[0] not in ("gtk-launch",)]
         self.table("glimpse doctor", [(Text("✔" if ok else "✘", style="#a9c4a4" if ok else "#d49a92"), name if ok else f"{name}  [dim]{fix}[/]") for name, ok, fix in checks])
         if all(ok for _, ok, _ in checks):
             toast.show("glimpse doctor", "Everything looks good.", "done", ms=3000)

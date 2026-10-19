@@ -9,7 +9,7 @@ Type a task. glimpse does it in your apps, on your screen, checks the result, an
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-5c616a)](LICENSE.md)
 [![Platform: GNOME on Wayland](https://img.shields.io/badge/platform-GNOME%20on%20Wayland-8b9099)](#requirements)
-[![Version 0.3.5](https://img.shields.io/badge/version-0.3.5-d4d7dd)](pyproject.toml)
+[![Version 0.3.6](https://img.shields.io/badge/version-0.3.6-d4d7dd)](pyproject.toml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-8b9099)](pyproject.toml)
 [![Benchmark: 11/11](https://img.shields.io/badge/benchmark-11%2F11%20tasks-a9c4a4)](#benchmark)
 
@@ -65,6 +65,7 @@ To update glimpse, run the same command again. To download the source only, use
 - [What you can ask](#what-you-can-ask)
 - [Requirements](#requirements)
 - [Set up](#set-up)
+- [Make sure nothing blocks glimpse](#make-sure-nothing-blocks-glimpse)
 - [Use glimpse](#use-glimpse)
 - [Stop a task](#stop-a-task)
 - [How glimpse works](#how-glimpse-works)
@@ -143,6 +144,30 @@ Environment variables have priority over the file.
 </details>
 
 To examine the setup later, run `glimpse /doctor`.
+
+## Make sure nothing blocks glimpse
+
+Run `glimpse /doctor`. It examines each item below and gives the fix for each problem.
+
+| Item | Why glimpse needs it | Fix |
+|---|---|---|
+| GNOME on Wayland | glimpse operates only this desktop. | Log in to a "GNOME" session, not "GNOME on Xorg". |
+| `computer-use-linux` 0.7.18 or newer | Older versions do not give the screen and the actions that glimpse uses. | `npm install -g @agent-sh/computer-use-linux@latest` |
+| The ydotool daemon | It moves the pointer and types. | `systemctl --user enable --now ydotoold` |
+| Your user in the `input` group | The stop key and the pause read your keyboard and touchpad. | `sudo usermod -aG input $USER`, then log out and log in. |
+| Accessibility on | Apps publish their controls only when it is on. | `gsettings set org.gnome.desktop.interface toolkit-accessibility true` |
+| `GNOME_ACCESSIBILITY=1` and `ACCESSIBILITY_ENABLED=1` | Without them, web browsers do not publish the page content. Then glimpse can find web controls only on the screenshot. | The installer writes them in `~/.config/environment.d/90-glimpse.conf`. Log out and log in after the installation. |
+| Browsers started after the setup | A browser that started before the setup does not publish its pages. | Close the browser and open it again one time. |
+
+glimpse operates these web browsers:
+
+| Family | Browsers | How glimpse makes the page visible |
+|---|---|---|
+| Firefox | Firefox, Zen, LibreWolf, Floorp, Waterfox | `GNOME_ACCESSIBILITY=1` |
+| Chromium | Chrome, Chromium, Brave, Edge, Vivaldi, Opera | `ACCESSIBILITY_ENABLED=1`, and the `--force-renderer-accessibility` flag when glimpse starts the browser |
+
+glimpse uses the browser that is open. If no browser is open, it starts Zen Browser.
+To use a different default browser, set `browser` in `~/.config/jev/config.json`, for example `"browser": "brave"`.
 
 ## Use glimpse
 
@@ -361,7 +386,7 @@ Write the variable parts as `{NAME}`. Do not put examples in lessons, because th
 ## Limitations
 
 - glimpse operates only GNOME on Wayland.
-- The web browser does not show page text to accessibility tools. glimpse clicks web pages from the screenshot, or it reads public pages with `read_page`.
+- A web browser that started before the setup does not show its page content. Then glimpse finds web controls only on the screenshot. Open the browser again one time (see [Make sure nothing blocks glimpse](#make-sure-nothing-blocks-glimpse)).
 - LibreOffice has large accessibility trees. Some steps in Calc take approximately 4 seconds for a full read.
 - The benchmark results come from one machine and one run of each task.
 - `live/run_live.py` is an old demo. It needs an `agent_src` folder that is not in this repository.

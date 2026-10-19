@@ -50,9 +50,11 @@ if [ -z "${GLIMPSE_SKIP_SYSTEM:-}" ]; then
   fi
 
   # --- 2. computer-use-linux (reads windows, sends clicks and keys) -------------------------------
-  if ! command -v computer-use-linux >/dev/null && command -v npm >/dev/null; then
-    say "Installing computer-use-linux"
-    npm install -g @agent-sh/computer-use-linux 2>/dev/null || sudo npm install -g @agent-sh/computer-use-linux
+  if command -v npm >/dev/null; then  # install, or upgrade an old version (glimpse needs 0.7.18 or newer)
+    say "Installing the latest computer-use-linux"
+    npm install -g --allow-scripts=@agent-sh/computer-use-linux @agent-sh/computer-use-linux@latest 2>/dev/null \
+      || npm install -g @agent-sh/computer-use-linux@latest 2>/dev/null \
+      || sudo npm install -g @agent-sh/computer-use-linux@latest
   fi
 
   # --- 3. the ydotool daemon, as a user service ------------------------------------------------
@@ -78,8 +80,13 @@ UNIT
     systemctl --user enable --now ydotoold.service >/dev/null 2>&1 || note "ydotoold starts after you log in again."
   fi
 
-  # --- 4. accessibility (apps publish their controls) --------------------------------------------
+  # --- 4. accessibility (apps and browsers publish their controls) ---------------------------------
   command -v gsettings >/dev/null && gsettings set org.gnome.desktop.interface toolkit-accessibility true 2>/dev/null || true
+  mkdir -p "$HOME/.config/environment.d"
+  printf '%s\n' '# glimpse: apps publish their controls to accessibility tools' \
+    'GNOME_ACCESSIBILITY=1   # Firefox, Zen, LibreWolf' 'ACCESSIBILITY_ENABLED=1   # Chrome, Chromium, Brave, Edge' \
+    > "$HOME/.config/environment.d/90-glimpse.conf"
+  NEED_RELOGIN=1
 fi
 
 # --- 5. glimpse itself -------------------------------------------------------------------------

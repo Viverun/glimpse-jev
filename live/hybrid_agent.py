@@ -17,6 +17,7 @@ from pathlib import Path
 
 from typesafe_sdk import Box, Choice, Image, Noul
 
+import browsers
 import changes
 import memory
 from a11y_agent import STOP_FILE, describe
@@ -695,7 +696,7 @@ class HybridAgent(JevAgent):
             cmd = ["gtk-launch", did, path]
         else:
             cmd = ["xdg-open", path]
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=config.app_env())
         name = Path(path).name
         for i in range(50):
             time.sleep(0.4)
@@ -724,7 +725,8 @@ class HybridAgent(JevAgent):
         if not did:
             return f"no installed app named '{name}'"
         before = {w["window_id"] for w in self.d.windows()}
-        subprocess.Popen(["gtk-launch", did], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        subprocess.Popen(browsers.launch_command(did), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True, env=config.app_env())
         for i in range(24):
             time.sleep(0.5)
             wins = self.d.windows()
@@ -753,8 +755,8 @@ class HybridAgent(JevAgent):
             self.scrolled += 1
         if do == "goto":
             w = self.task_window or {}
-            if "zen" not in (w.get("app_id") or "") and "firefox" not in (w.get("app_id") or "") and "brave" not in (w.get("app_id") or ""):
-                err = self.open_app("zen browser")  # jev's browser
+            if not browsers.is_browser(w):  # any open browser works (Zen, Firefox, Chrome, Brave...); else the default
+                err = self.open_app(config.get("browser") or "zen browser")
                 if err:
                     return err
                 self.act({"type": "key", "key": "ctrl+t", "label": "new tab"})

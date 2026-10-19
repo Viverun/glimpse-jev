@@ -37,7 +37,10 @@ class DesktopMCP:
         self._ready = threading.Event()
         self._stop = None
         from mcp import StdioServerParameters  # loaded on first use: it takes ~0.6 s to import
-        asyncio.run_coroutine_threadsafe(self._serve(StdioServerParameters(command=command, args=list(args))), self._loop)
+        import os
+        # glimpse draws its own edge glow and cursor: computer-use-linux 0.7.12+ would add a second overlay.
+        env = {**os.environ, "COMPUTER_USE_LINUX_INDICATOR": "0"}
+        asyncio.run_coroutine_threadsafe(self._serve(StdioServerParameters(command=command, args=list(args), env=env)), self._loop)
         if not self._ready.wait(30):
             raise RuntimeError("computer-use-linux MCP did not start")
 

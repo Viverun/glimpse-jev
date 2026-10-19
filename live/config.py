@@ -80,3 +80,10 @@ def jev_client(**kw):
     from typesafe_sdk import TypeSafeClient
     return TypeSafeClient(model=setting("jev_model"), api_key=setting("typesafe_api_key") or None,
                           base_url=setting("typesafe_base_url") or None, **kw)
+
+
+def app_env() -> dict:
+    """Environment for apps glimpse starts: GNOME_ACCESSIBILITY=1 makes Firefox-based browsers (Zen) and other
+    apps publish their controls and page content to accessibility tools; without it Zen shows none."""
+    import browsers
+    return browsers.env()

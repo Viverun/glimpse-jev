@@ -960,3 +960,21 @@ def test_not_found_is_pushed_back_only_once_and_only_early():
     assert r["status"] == "done" and r["report"] == "I could not find the setting anywhere" and not a.failures
     honest = make_agent([{"status": "done", "report": "You didn't get any new messages", "steps": []}])
     assert honest.run("check messages")["report"] == "You didn't get any new messages"  # no action taken: no pushback
+
+
+@pytest.mark.parametrize("app_id,fam", [("zen.desktop", "firefox"), ("firefox_firefox.desktop", "firefox"), ("org.mozilla.firefox", "firefox"),
+                                        ("brave-browser", "chromium"), ("google-chrome", "chromium"), ("chromium", "chromium"),
+                                        ("microsoft-edge", "chromium"), ("org.gnome.TextEditor", None)])
+def test_browser_families(app_id, fam):
+    import browsers
+    assert browsers.family(app_id) == fam
+
+
+def test_browsers_start_with_accessibility(tmp_path, monkeypatch):
+    import browsers
+    (tmp_path / "brave-browser.desktop").write_text("[Desktop Entry]\nType=Application\nName=Brave\nExec=/usr/bin/brave-browser-stable %U\n")
+    monkeypatch.setattr(browsers, "APP_DIRS", [tmp_path])
+    assert browsers.launch_command("brave-browser") == ["/usr/bin/brave-browser-stable", "--force-renderer-accessibility"]
+    assert browsers.launch_command("zen") == ["gtk-launch", "zen"]
+    e = browsers.env()
+    assert e["GNOME_ACCESSIBILITY"] == "1" and e["ACCESSIBILITY_ENABLED"] == "1"

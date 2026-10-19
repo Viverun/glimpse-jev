@@ -373,7 +373,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
             if app:
                 before = {w["window_id"] for w in desktop.windows()}
                 view.status = f"launching {app[0].title()}…"
-                subprocess.Popen(["gtk-launch", app[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                subprocess.Popen(["gtk-launch", app[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=config.app_env())
                 for i in range(30):
                     time.sleep(0.5)
                     wins = desktop.windows()

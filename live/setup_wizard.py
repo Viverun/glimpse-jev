@@ -5,6 +5,7 @@ Settings go to ~/.config/jev/config.json (mode 600). Environment variables still
 
 import shutil
 import subprocess
+from pathlib import Path
 
 import config
 
@@ -46,13 +47,39 @@ def test_jev(values: dict) -> str | None:
 
 
 def desktop_checks() -> list[tuple[str, bool, str]]:
+    """Everything that can block glimpse, with the fix for each. (name, ok, how to fix)"""
+    import os
+    import re as _re
+
     def has(cmd):
         return bool(shutil.which(cmd))
-    session = subprocess.run(["bash", "-c", "echo $XDG_SESSION_TYPE $XDG_CURRENT_DESKTOP"], capture_output=True, text=True).stdout
+
+    def out(cmd):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
+        except Exception:
+            return ""
+    session = f"{os.environ.get('XDG_SESSION_TYPE', '')} {os.environ.get('XDG_CURRENT_DESKTOP', '')}"
+    cul = out(["npm", "ls", "-g", "--depth=0", "@agent-sh/computer-use-linux"]) if has("npm") else ""
+    ver = _re.search(r"computer-use-linux@(\d+)\.(\d+)\.(\d+)", cul)
+    ver_ok = bool(ver) and tuple(map(int, ver.groups())) >= (0, 7, 18)
+    import browsers
+    unready = [name for name, pid, fam in browsers.running() if not browsers.process_ready(pid, fam)]
+    in_input = "input" in out(["id", "-nG"]).split()
+    sock = Path(f"/run/user/{os.getuid()}/.ydotool_socket").exists()
     return [
-        ("GNOME on Wayland", "wayland" in session and "GNOME" in session, "jev drives GNOME Wayland desktops"),
-        ("computer-use-linux", has("computer-use-linux"), "npm install -g @agent-sh/computer-use-linux"),
-        ("ydotool", has("ydotool"), "sudo apt install ydotool, and run ydotoold"),
+        ("GNOME on Wayland", "wayland" in session and "GNOME" in session, "glimpse operates GNOME on Wayland sessions"),
+        ("computer-use-linux 0.7.18 or newer", ver_ok or (not ver and has("computer-use-linux")),
+         "npm install -g @agent-sh/computer-use-linux@latest"),
+        ("ydotool daemon running", sock, "systemctl --user enable --now ydotoold"),
+        ("you are in the 'input' group (stop key, pause)", in_input, "sudo usermod -aG input $USER, then log out and in"),
+        ("accessibility on", out(["gsettings", "get", "org.gnome.desktop.interface", "toolkit-accessibility"]) == "true",
+         "gsettings set org.gnome.desktop.interface toolkit-accessibility true"),
+        ("apps publish their controls (GNOME_ACCESSIBILITY / ACCESSIBILITY_ENABLED)",
+         Path.home().joinpath(".config/environment.d/90-glimpse.conf").exists() or os.environ.get("GNOME_ACCESSIBILITY") == "1",
+         "echo GNOME_ACCESSIBILITY=1 > ~/.config/environment.d/90-glimpse.conf, then log out and in"),
+        ("open browsers publish page content", not unready,
+         f"restart {', '.join(unready)} once (started before glimpse set accessibility up)"),
         ("gtk-launch", has("gtk-launch"), "sudo apt install libgtk-3-bin"),
         ("LibreOffice (optional)", has("libreoffice"), "needed for spreadsheet and document tasks"),
     ]
