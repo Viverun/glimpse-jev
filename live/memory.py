@@ -119,12 +119,121 @@ def runs(limit: int = 300) -> list[dict]:
     return out
 
 
-def record(task: str, status: str, ok_steps: list[dict], failures: list[str], seconds: float) -> None:
+def record(task: str, status: str, ok_steps: list[dict], failures: list[str], seconds: float,
+           category: str = "", app: str = "", plans: int = 0, workflow: str = "") -> dict:
+    """Store a run and return its learning report (how it compares with earlier runs of the same kind)."""
     DIR.mkdir(parents=True, exist_ok=True)
     entry = {"time": time.strftime("%Y-%m-%d %H:%M"), "task": task, "status": status,
-             "steps": ok_steps, "failures": failures[:6], "seconds": round(seconds, 1)}
+             "steps": ok_steps, "failures": failures[:6], "seconds": round(seconds, 1),
+             "category": category, "app": (app or "").removesuffix(".desktop"), "plans": plans, "workflow": workflow}
+    report = learning(entry, runs())
+    entry["learnability"] = report["learnability"]
     with MEMORY.open("a") as f:
         f.write(json.dumps(entry) + "\n")
+    return report
+
+
+# --- learning: categories, learnability, improvement ----------------------------------------------
+CATEGORIES = {
+    "spreadsheet": "spreadsheets: tables, cells, formulas, sorting, charts (LibreOffice Calc...)",
+    "document": "documents: writing, formatting, headings, lists, PDF (LibreOffice Writer, Text Editor...)",
+    "files": "files and folders: create, move, rename, organize (Files app)",
+    "web": "web: open pages, search, read or extract information from websites",
+    "email": "email: read, write, send, triage mail (Gmail...)",
+    "messages": "chat apps: read or send messages in Telegram, Discord, Slack, Signal...",
+    "agent": "supervising another AI agent (Claude, ChatGPT...): give it tasks and read its replies",
+    "system": "system and settings: apps, windows, preferences, the desktop itself",
+    "question": "a question, a calculation or small talk answered without using the desktop",
+    "other": "anything else",
+}
+APP_CATEGORY = {"libreoffice-calc": "spreadsheet", "libreoffice-writer": "document", "org.gnome.TextEditor": "document",
+                "org.gnome.Nautilus": "files", "zen": "web", "telegram-desktop_telegram-desktop": "messages", "firefox": "web", "org.gnome.Settings": "system"}
+
+
+def categorize(jev, task: str, app: str = "") -> str:
+    """The kind of task (one Jev Choice); the app decides when Jev can't."""
+    fallback = APP_CATEGORY.get((app or "").removesuffix(".desktop"), "other")
+    try:
+        a = jev.system_one(state={"task": task, "app": app or "unknown"}, questions={"c": Choice(
+            instructions="Which category does `task` belong to?", criteria=dict(CATEGORIES))}).choices["c"]
+        return a.choice if a.confidence >= 0.4 else fallback
+    except Exception:
+        return fallback
+
+
+def _words(t: str) -> set[str]:
+    return set(re.findall(r"[a-z]{3,}", t.lower())) - {"the", "and", "with", "into", "from", "then", "that", "this", "for"}
+
+
+def similar_runs(entry: dict, past: list[dict]) -> list[dict]:
+    """Earlier runs of the same task (same text), else of the same kind (same category and app, similar words)."""
+    same = [r for r in past if r["task"].strip().lower() == entry["task"].strip().lower()]
+    if same:
+        return same
+    w = _words(entry["task"])
+    def close(r):
+        o = _words(r["task"])
+        return w and o and len(w & o) / len(w | o) >= 0.35
+    return [r for r in past if r.get("category") == entry.get("category") and r.get("app") == entry.get("app")
+            and entry.get("category") and close(r)]
+
+
+def learnability(entry: dict) -> int:
+    """0-100: how well this run can be learned from and reused: verified done, clean steps, few replans,
+    and a reusable recipe (a workflow) that came out of it or was used."""
+    if entry["status"] != "done":
+        return 10 if entry.get("steps") else 0
+    score = 40
+    score += 20 if not entry.get("failures") else max(0, 20 - 7 * len(entry["failures"]))
+    plans = entry.get("plans") or 1
+    score += 20 if plans <= 1 else 12 if plans <= 2 else 6 if plans <= 4 else 0
+    score += 20 if entry.get("workflow") else 10 if len(entry.get("steps") or []) >= 2 else 0
+    return min(score, 100)
+
+
+def learning(entry: dict, past: list[dict]) -> dict:
+    """How this run compares with earlier ones of the same kind, and a label for it."""
+    prev = [r for r in similar_runs(entry, past) if r.get("status") == "done"]
+    rep = {"category": entry.get("category") or "other", "app": entry.get("app") or "", "attempt": len(similar_runs(entry, past)) + 1,
+           "learnability": learnability(entry), "label": "first time", "faster": None, "fewer_plans": None}
+    if entry["status"] != "done":
+        rep["label"] = "not learned (did not finish)"
+        return rep
+    if not prev:
+        return rep
+    best_before = min(r["seconds"] for r in prev)
+    last = prev[-1]
+    rep["faster"] = round(100 * (last["seconds"] - entry["seconds"]) / last["seconds"]) if last["seconds"] else None
+    if last.get("plans") and entry.get("plans"):
+        rep["fewer_plans"] = last["plans"] - entry["plans"]
+    rep["label"] = ("best yet" if entry["seconds"] < best_before else
+                    "improved" if (rep["faster"] or 0) >= 10 else "about the same" if (rep["faster"] or 0) > -10 else "slower")
+    return rep
+
+
+def learning_stats() -> list[dict]:
+    """Per category: runs, how many finished, mean learnability, and the time trend of finished runs."""
+    out = []
+    past = runs(2000)
+    for cat in CATEGORIES:
+        rs = [r for r in past if (r.get("category") or "other") == cat]
+        if not rs:
+            continue
+        done = [r for r in rs if r["status"] == "done"]
+        # Only repeats tell whether glimpse got better: each repeated task's latest run against its first run.
+        gains = []
+        for i, r in enumerate(done):
+            first = [x for x in similar_runs(r, done[:i]) if x.get("status") == "done"]
+            later = [x for x in done[i + 1:] if similar_runs(x, [r])]
+            if first or not later:
+                continue
+            last = later[-1]
+            gains.append(100 * (r["seconds"] - last["seconds"]) / r["seconds"])
+        out.append({"category": cat, "runs": len(rs), "done": len(done), "repeated": len(gains),
+                    "learnability": round(sum(r.get("learnability", learnability(r)) for r in rs) / len(rs)),
+                    "trend": round(sum(gains) / len(gains)) if gains else None,
+                    "apps": sorted({r.get("app") for r in rs if r.get("app")})})
+    return out
 
 
 def recall(jev, task: str) -> str:
@@ -154,8 +263,14 @@ def recall(jev, task: str) -> str:
     same = [x for x in past if x["task"] == r["task"]]
     lessons = [f for x in same for f in x.get("failures", [])][-6:]
     parts = [f"A similar past task: {r['task']!r} ({r['status']}, {r.get('seconds')} s)."]
-    if r["status"] == "done" and r.get("steps"):
+    slow = (r.get("plans") or 0) > 6 or len(r.get("steps") or []) > 15
+    if r["status"] == "done" and r.get("steps") and not slow:
         parts.append("Steps that worked then (adapt values to the new task):\n" + json.dumps(r["steps"]))
+    elif r["status"] == "done" and r.get("steps"):
+        # A slow run's full step list teaches its detours: give the outcome and let the workflow carry the route.
+        parts.append(f"That run was slow ({r.get('seconds')} s, {r.get('plans') or '?'} planning rounds, "
+                     f"{len(r['steps'])} steps) and went in circles: do NOT repeat its exploration. Use the reusable "
+                     "workflow below if one is given, and plan the whole task in one reply.")
     if lessons:
         parts.append("What went wrong before (avoid):\n" + "\n".join(f"- {x}" for x in lessons))
     return "\n".join(parts)
@@ -163,6 +278,7 @@ def recall(jev, task: str) -> str:
 
 # --- reusable workflows (Agent Workflow Memory) ---------------------------------------------------
 WORKFLOWS = DIR / "workflows.json"
+LAST_WORKFLOW = ""  # the workflow recalled for the current task
 
 INDUCE = """You extract reusable workflows from computer-use runs on a GNOME desktop (Agent Workflow Memory).
 You get a task that was completed and verified, the steps that worked, and the workflows already known.
@@ -248,6 +364,8 @@ def workflows_for(jev, task: str) -> str:
     if a.choice == "none" or a.confidence < 0.5:
         return ""
     w = wfs[int(a.choice)]
+    global LAST_WORKFLOW
+    LAST_WORKFLOW = w["name"]
     return (f"A reusable workflow for this kind of task (from earlier verified runs; fill in the {{variables}} with "
             f"this task's values, skip steps that don't apply): {w['name']}\n"
             f"variables: {json.dumps(w.get('variables') or {})}\nsteps: {json.dumps(w['steps'])}")

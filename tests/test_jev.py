@@ -789,3 +789,29 @@ def test_settings_env_beats_file_and_file_is_private(tmp_path, monkeypatch):
     assert config.setting("planner_base_url") == "https://env/v1"           # the environment wins
     config.apply()
     assert __import__("os").environ["TYPESAFE_API_KEY"] == "ts-file"
+
+
+def test_learning_labels_improvement_and_learnability(mem):
+    first = memory.record("check telegram for unread messages", "done", [{"do": "click"}] * 55, ["x", "y", "z"], 370,
+                          category="agent", app="telegram", plans=34)
+    assert first["label"] == "first time" and first["attempt"] == 1 and first["learnability"] < 60
+    again = memory.record("check telegram for unread messages", "done", [{"do": "open_app"}, {"do": "click"}], [], 40,
+                          category="agent", app="telegram", plans=1, workflow="Check Telegram for unread messages")
+    assert again["label"] == "best yet" and again["faster"] == 89 and again["fewer_plans"] == 33
+    assert again["attempt"] == 2 and again["learnability"] == 100
+    failed = memory.record("check telegram for unread messages", "error", [], ["boom"], 5, category="agent", app="telegram")
+    assert failed["label"].startswith("not learned") and failed["learnability"] == 0
+    stats = {c["category"]: c for c in memory.learning_stats()}
+    assert stats["agent"]["runs"] == 3 and stats["agent"]["done"] == 2 and stats["agent"]["trend"] == 89
+
+
+def test_similar_tasks_compare_within_their_category(mem):
+    memory.record("sort sales.csv by price in calc", "done", [{"do": "select"}], [], 60, category="spreadsheet", app="libreoffice-calc", plans=2)
+    memory.record("send an email to bob", "done", [{"do": "goto"}], [], 10, category="email", app="zen", plans=1)
+    rep = memory.learning({"task": "sort report.csv by price in calc", "status": "done", "seconds": 30, "plans": 1,
+                           "category": "spreadsheet", "app": "libreoffice-calc", "steps": [{}], "failures": []}, memory.runs())
+    assert rep["attempt"] == 2 and rep["faster"] == 50
+
+
+def test_repeated_click_between_other_moves_is_a_loop():
+    assert changes.looping(["click › Archived chats", "go to › x", "click › Archived chats", "focus › y", "click › Archived chats"])

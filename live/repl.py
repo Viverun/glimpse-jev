@@ -47,6 +47,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "remember": ("<text>", "save a preference for every future run"),
     "forget": ("[n|habits|workflows|lessons]", "forget preferences or learned things"),
     "memory": ("[edit]", "show what jev knows; `edit` opens your JEV.md notes"),
+    "learning": ("", "what glimpse has learned, per kind of task, and how much faster it got"),
     "workflows": ("", "list learned workflows"),
     "lessons": ("", "list taught lessons"),
     "learn": ("", "turn past runs into reusable workflows"),
@@ -477,6 +478,15 @@ class Repl:
             ("blocked", ", ".join(a.block) or "(none)"),
             ("memory", f"{len(memory.runs())} runs · {len(memory.load_profile().get('preferences', []))} preferences · JEV.md {'set' if memory.notes() else 'empty'}"),
         ])
+
+    def cmd_learning(self, rest):
+        rows = []
+        for c in memory.learning_stats():
+            trend = "" if c["trend"] is None else (f"  [#a9c4a4]repeats {c['trend']}% faster[/]" if c["trend"] > 0
+                                                   else f"  [#d49a92]repeats {-c['trend']}% slower[/]")
+            rows.append((c["category"], f"{c['done']}/{c['runs']} done  ·  learnability {c['learnability']}/100{trend}"
+                                        + (f"  [#5c616a]{', '.join(c['apps'][:3])}[/]" if c["apps"] else "")))
+        self.table("glimpse learning", rows, "nothing learned yet: finish a task first")
 
     def cmd_glow(self, rest):
         if rest in ("on", "off"):

@@ -56,7 +56,8 @@ console = Console()
 def installed_apps() -> dict[str, str]:
     """Visible .desktop apps: lowercase name -> desktop id."""
     dirs = [Path("/usr/share/applications"), Path.home() / ".local/share/applications",
-            Path("/var/lib/flatpak/exports/share/applications"), Path.home() / ".local/share/flatpak/exports/share/applications"]
+            Path("/var/lib/flatpak/exports/share/applications"), Path.home() / ".local/share/flatpak/exports/share/applications",
+            Path("/var/lib/snapd/desktop/applications")]  # Snap apps (Telegram, Spotify...)
     apps = {}
     for d in dirs:
         for f in d.glob("*.desktop") if d.exists() else []:
@@ -384,6 +385,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
                 standing = "\n\n".join(x for x in (memory.notes_text(), sessions.context(session) if session else "") if x)
                 agent.context = (standing + "\n\n" if standing else "") + (habits + "\n" if habits else "") + (memory.desktop_context(args.prompt, prof, (target or {}).get("app_id") or (f"{guess[1]}.desktop" if guess else None))
                                  + hint + "\n\n" + memory.recall(agent.jev, args.prompt))
+                memory.LAST_WORKFLOW = ""
                 flow = memory.workflows_for(agent.jev, args.prompt)
                 if flow:
                     agent.context += "\n\n" + flow
@@ -412,7 +414,13 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
         notify.finished(result, secs)
     save_log(args.prompt, result, secs, rows)
     if isinstance(agent, HybridAgent) and not os.environ.get("JEV_NO_LEARN"):  # benchmarks don't write experience
-        memory.record(args.prompt, result["status"], agent.ok_steps, agent.failures, secs)
+        app_id = f"{guess[1]}.desktop" if guess else (agent.task_window or {}).get("app_id") or ""
+        plans = len([r for r in rows if r.get("kind") == "plan"])
+        category = memory.categorize(agent.jev, args.prompt, app_id)
+        learned = memory.record(args.prompt, result["status"], agent.ok_steps, agent.failures, secs,
+                                category=category, app=app_id, plans=plans, workflow=memory.LAST_WORKFLOW)
+        console.print(learning_line(learned))
+        result["learning"] = learned
         if result["status"] == "done":
             # Agent Workflow Memory: abstract this verified run into a reusable workflow, in the background
             # (the process waits for it at exit; in interactive mode it runs while you type the next task).
@@ -422,6 +430,26 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
                              daemon=False).start()
     result["prompt_tokens"] = getattr(agent, "last_prompt_tokens", 0)
     return result, secs
+
+
+def learning_line(rep: dict) -> Text:
+    """◐ learned  spreadsheet › libreoffice-calc · 2nd time · improved: 41% faster, 2 fewer plans · learnability 85"""
+    t = Text("  ◐ ", style=MUTED)
+    t.append("learned  ", style=f"bold {ACCENT}")
+    t.append(rep["category"] + (f" › {rep['app']}" if rep.get("app") else ""), style=ACCENT)
+    n = rep["attempt"]
+    t.append(f"  ·  {n}{'st' if n == 1 else 'nd' if n == 2 else 'rd' if n == 3 else 'th'} time", style=MUTED)
+    color = GOOD if rep["label"] in ("best yet", "improved") else BAD if rep["label"].startswith(("slower", "not")) else MUTED
+    t.append(f"  ·  {rep['label']}", style=color)
+    bits = []
+    if rep.get("faster") is not None:
+        bits.append(f"{abs(rep['faster'])}% {'faster' if rep['faster'] >= 0 else 'slower'}")
+    if rep.get("fewer_plans"):
+        bits.append(f"{abs(rep['fewer_plans'])} {'fewer' if rep['fewer_plans'] > 0 else 'more'} plans")
+    if bits:
+        t.append(": " + ", ".join(bits), style=color)
+    t.append(f"  ·  learnability {rep['learnability']}/100", style=MUTED)
+    return t
 
 
 def bring_back(desktop: Desktop, own: dict | None) -> None:

@@ -139,8 +139,13 @@ def repeats_block(seq: list[str], k: int, times: int) -> bool:
 
 
 def looping(seq: list[str]) -> list[str] | None:
-    """The repeated block if the recent actions go in circles (A B A B A B, A B C x3, or one action x8)."""
+    """The repeated block if the recent actions go in circles (A B A B A B, A B C x3, one action x8), or one
+    target clicked 3 times within the last 6 actions (clicking the same thing again and again between other moves)."""
     for k, times in ((2, 3), (3, 3), (1, 8)):
         if repeats_block(seq, k, times):
             return seq[-k:]
+    recent = seq[-6:]
+    for a in dict.fromkeys(recent):
+        if a.startswith("click") and recent.count(a) >= 3:
+            return [a]
     return None

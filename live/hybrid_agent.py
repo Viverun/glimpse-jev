@@ -822,6 +822,10 @@ class HybridAgent(JevAgent):
             note = []
             if progress:
                 note.append(f"Your progress summary so far: {progress}")
+            if rounds > 12 and not self.timeboxed and rounds % 4 == 1:
+                note.append(f"You have used {rounds - 1} planning rounds on this task. Wrap up: if what you have verified "
+                            "already answers the task, answer done now with that report; otherwise take the most direct "
+                            "remaining route, not another look around.")
             if reflection:  # Agent-S style: name the cycle and ask for something new
                 note.append(reflection)
                 reflection = ""
