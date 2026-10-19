@@ -9,7 +9,7 @@ Type a task. glimpse does it in your apps, on your screen, checks the result, an
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-5c616a)](LICENSE.md)
 [![Platform: GNOME on Wayland](https://img.shields.io/badge/platform-GNOME%20on%20Wayland-8b9099)](#requirements)
-[![Version 0.3.11](https://img.shields.io/badge/version-0.3.11-d4d7dd)](pyproject.toml)
+[![Version 0.3.12](https://img.shields.io/badge/version-0.3.12-d4d7dd)](pyproject.toml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-8b9099)](pyproject.toml)
 [![Benchmark: 11/11](https://img.shields.io/badge/benchmark-11%2F11%20tasks-a9c4a4)](#benchmark)
 
@@ -258,6 +258,7 @@ Special steps make difficult parts reliable:
 The web browser does not give glimpse a list of controls. Thus glimpse works from the screenshot:
 
 - The planner identifies each control by its label or icon and by its position, for example "the pencil icon, second in the left toolbar".
+- If a control is not in the list, glimpse reads the text on the screenshot with local OCR ([RapidOCR](https://github.com/RapidAI/RapidOCR)), and Jev selects the target's text. This is more exact than a free box. For an icon without text, Jev finds it as a box. The OCR result is kept for each screenshot, so a second look costs nothing. To turn OCR off, set `"ocr": false` in `~/.config/jev/config.json`.
 - If a click by description fails one time, the planner reads the point from the screenshot and uses `click_at`.
 - To draw, glimpse selects the tool and the color, and then draws the full picture in one `draw` step. It builds the picture from simple shapes.
 - glimpse uses one reliable site for a task (for example [JS Paint](https://jspaint.app) for drawing). It does not change to a different site after a small failure.

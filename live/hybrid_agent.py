@@ -470,6 +470,36 @@ class HybridAgent(JevAgent):
         a, z = self.to_screen(b.left, b.top, shot), self.to_screen(b.right, b.bottom, shot)
         return (a[0], a[1], z[0], z[1]) if a and z else None
 
+    def ocr_click(self, target: str, shot: bytes, button: str = "left", count: int = 1) -> bool:
+        """The target's text on the screenshot (local OCR), chosen by Jev from a list: exact where a free box misses.
+        False when OCR is off, finds no text, or none of the texts is the target (icons): then visual_click."""
+        import ocr
+        if not shot or not ocr.enabled():
+            return False
+        try:
+            found = self._t("ocr", ocr.texts, shot)
+        except Exception:
+            return False
+        cands = ocr.candidates(target, found)
+        if not cands:
+            return False
+        crit = {str(i): f"text {t!r} at ({(b[0] + b[2]) / 2:.2f}, {(b[1] + b[3]) / 2:.2f}) of the window" for i, (t, b) in enumerate(cands)}
+        crit["none"] = "None of these texts is the target (it may be an icon without text)."
+        try:
+            r = self.ask({"screen": Image(shot), "texts": crit}, {"t": Choice(
+                instructions=f"Which text on `screen` (listed in `texts`) is the thing to click: {target}?", criteria=crit)})
+            a = r.choices["t"]
+        except Exception:
+            return False
+        if a.choice == "none" or a.confidence < 0.5:
+            return False
+        b = cands[int(a.choice)][1]
+        p = self.to_screen((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, shot)
+        if not p:
+            return False
+        self._t("act", __import__("cursor").click, p[0], p[1], button, count)
+        return True
+
     def visual_click(self, target: str, shot: bytes, button: str = "left", count: int = 1) -> bool:
         """Fallback for elements the tree can't place (web pages, canvases, GTK4): Jev finds the target on the
         window screenshot, and the real pointer glides there and clicks."""
@@ -779,7 +809,7 @@ class HybridAgent(JevAgent):
             kind = "right_click" if button == "right" else "double_click" if count == 2 else "click"
             if el:
                 self.act({"type": "click", "el": el, "label": f"click {describe(el)}", "kind": kind})
-            elif not (shot and self.visual_click(target, shot, button, count)):
+            elif not (shot and (self.ocr_click(target, shot, button, count) or self.visual_click(target, shot, button, count))):
                 return f"could not find '{target}'" + (f"; closest elements: {'; '.join(self.closest)}" if self.closest else "")
         elif do == "type":
             if not self.task_window:

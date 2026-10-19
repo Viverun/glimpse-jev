@@ -1053,3 +1053,18 @@ def test_identical_clean_task_is_replayed_without_the_planner(mem):
     a.replay = [{"do": "key", "key": "a"}]
     r = a.run("t")
     assert r["status"] == "done" and r["steps"] == 1 and len(plans_called) == 1  # replay ran, then one planner call
+
+
+def test_ocr_click_chooses_a_text_and_falls_back_for_icons(monkeypatch):
+    import cursor
+    import ocr
+    clicks = []
+    monkeypatch.setattr(cursor, "click", lambda x, y, button="left", count=1: clicks.append((round(x), round(y))))
+    monkeypatch.setattr(ocr, "enabled", lambda: True)
+    monkeypatch.setattr(ocr, "texts", lambda shot: [("Cancel", (0.1, 0.1, 0.2, 0.2)), ("Save", (0.8, 0.8, 0.9, 0.9))])
+    a, _ = _pointer_agent(monkeypatch)
+    picks = iter(["1", "none"])
+    a.ask = lambda state, q: type("R", (), {"choices": {"t": FakeChoice(next(picks), 0.9)}})()
+    assert a.ocr_click("the Save button", b"shot") and clicks == [(950, 560)]  # centre of (0.85, 0.85) of the window
+    assert not a.ocr_click("the close icon", b"shot")                        # no text fits: the box takes over
+    assert [t for t, _ in ocr.candidates("save it", ocr.texts(b""))][0] == "Save"

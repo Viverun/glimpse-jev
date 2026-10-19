@@ -1,6 +1,6 @@
 [project]
 name = "glimse-jev"
-version = "0.3.11"
+version = "0.3.12"
 description = "glimpse: a computer-use harness for the Linux desktop. A planner plans, Jev acts and checks, and the harness learns from every task."
 authors = [
     { name = "Viverun", email = "185501522+Viverun@users.noreply.github.com" }
@@ -12,12 +12,14 @@ dependencies = [
     "mcp>=2.3.0",
     "numpy>=2.5.4",
     "odfpy>=1.4.1",
+    "onnxruntime>=1.31.0",
     "openai>=3.33.0",
     "opencv-python-headless>=5.0.0.93",
     "pandas>=3.0.6",
     "pillow>=13.0.0",
     "playwright==1.49.1",
     "prompt-toolkit>=3.0.53",
+    "rapidocr>=3.10.0",
     "rich>=15.0.0",
     "typesafe-sdk>=0.7.5",
 ]
