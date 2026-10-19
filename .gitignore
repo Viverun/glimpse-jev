@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Large / generated
+third_party/
+results/
+bench/results*.jsonl
+*.qcow2
+*.zip
+
+# Local run data and generated fixtures (not published)
+fixtures/
+*.log
+bench/harness2_runs/
