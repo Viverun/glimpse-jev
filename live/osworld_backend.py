@@ -53,7 +53,7 @@ class OSWorldServer:
 def parse_tree(xml: str) -> list[dict]:
     """OSWorld's XML -> flat nodes like computer-use-linux's: index, depth, parent_index, role, name, text, states,
     actions, and ABSOLUTE screen bounds (OSWorld gives screen coordinates)."""
-    from lxml import etree
+    import xml.etree.ElementTree as etree  # the standard library parser handles OSWorld's namespaced attributes
     root = etree.fromstring(xml.encode() if isinstance(xml, str) else xml)
     out: list[dict] = []
 

@@ -1066,3 +1066,33 @@ def test_ocr_click_chooses_a_text_and_falls_back_for_icons(monkeypatch):
     assert a.ocr_click("the Save button", shot) and done == [("click", 950, 560, "left", 1)]  # centre of (0.85, 0.85)
     assert not a.ocr_click("the close icon", shot)  # no text fits: the box takes over
     assert [t for t, _ in ocr.candidates("save it", ocr.texts(b""))][0] == "Save"
+
+
+OSWORLD_XML = """<desktop-frame xmlns:st="https://accessibility.ubuntu.example.org/ns/state"
+ xmlns:cp="https://accessibility.ubuntu.example.org/ns/component" xmlns:act="https://accessibility.ubuntu.example.org/ns/action">
+ <application name="soffice">
+  <frame name="sales.csv - LibreOffice Calc" st:showing="true" st:visible="true" st:active="true"
+         cp:screencoord="(0, 37)" cp:size="(1920, 1043)">
+   <push-button name="Sort Descending" st:showing="true" st:visible="true" cp:screencoord="(775, 80)" cp:size="(33, 35)" act:click_desc="Click"/>
+   <table-cell name="A1" st:showing="true" cp:screencoord="(45, 200)" cp:size="(66, 17)">Product</table-cell>
+  </frame>
+ </application>
+ <application name="gnome-shell"><frame name="hidden" cp:screencoord="(0, 0)" cp:size="(10, 10)"/></application>
+</desktop-frame>"""
+
+
+def test_osworld_tree_becomes_windows_and_elements(monkeypatch):
+    import osworld_backend as ob
+    nodes = ob.parse_tree(OSWORLD_XML)
+    btn = next(n for n in nodes if n["name"] == "Sort Descending")
+    assert btn["role"] == "push button" and btn["bounds"] == {"x": 775, "y": 80, "width": 33, "height": 35}
+    assert btn["actions"] == [{"name": "click"}] and "showing" in btn["states"]
+    cell = next(n for n in nodes if n["name"] == "A1")
+    assert cell["text"] == {"content": "Product"}
+    server = type("S", (), {"accessibility": lambda self: OSWORLD_XML})()
+    mcp = ob.OSWorldMCP(server)
+    wins = mcp.call("list_windows")["windows"]
+    assert [w["title"] for w in wins] == ["sales.csv - LibreOffice Calc"] and wins[0]["focused"]   # hidden frames skipped
+    st = mcp.call("get_app_state", window_id=wins[0]["window_id"], include_screenshot=False)
+    assert [n["name"] for n in st["accessibility_tree"]] == ["sales.csv - LibreOffice Calc", "Sort Descending", "A1"]
+    assert st["accessibility_tree"][1]["parent_index"] == 0 and st["accessibility_tree"][0]["depth"] == 1
