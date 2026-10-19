@@ -79,7 +79,8 @@ def desktop_checks() -> list[tuple[str, bool, str]]:
          Path.home().joinpath(".config/environment.d/90-glimpse.conf").exists() or os.environ.get("GNOME_ACCESSIBILITY") == "1",
          "echo GNOME_ACCESSIBILITY=1 > ~/.config/environment.d/90-glimpse.conf, then log out and in"),
         ("open browsers publish page content", not unready,
-         f"restart {', '.join(unready)} once (started before glimpse set accessibility up)"),
+         f"log out and in, or close {', '.join(unready)} and start it once with: GNOME_ACCESSIBILITY=1 "
+         f"ACCESSIBILITY_ENABLED=1 {' '.join(unready)} &   (reopening from the dock is not enough before the next login)"),
         ("gtk-launch", has("gtk-launch"), "sudo apt install libgtk-3-bin"),
         ("LibreOffice (optional)", has("libreoffice"), "needed for spreadsheet and document tasks"),
     ]
