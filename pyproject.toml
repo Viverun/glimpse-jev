@@ -1,7 +1,7 @@
 [project]
 name = "glimse-jev"
-version = "0.1.0"
-description = "Fast computer use on the GNOME desktop: a planner model plans, Jev acts and checks."
+version = "0.3.0"
+description = "glimpse: a computer-use harness for the Linux desktop. A planner plans, Jev acts and checks, and the harness learns from every task."
 authors = [
     { name = "Viverun", email = "185501522+Viverun@users.noreply.github.com" }
 ]

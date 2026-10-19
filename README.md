@@ -1,12 +1,15 @@
 <div align="center">
 
-# ◐ glimpse
+<img src="assets/logo.svg" alt="the glimpse mascot: a round pixel face, light grey on the left and darker grey on the right" width="96">
 
-**Computer use for your Linux desktop.**
-Type a task. glimpse does it in your apps, on your screen, and checks the result.
+# glimpse
+
+**A computer-use harness for your Linux desktop.**
+Type a task. glimpse does it in your apps, on your screen, checks the result, and learns from it.
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-5c616a)](LICENSE.md)
 [![Platform: GNOME on Wayland](https://img.shields.io/badge/platform-GNOME%20on%20Wayland-8b9099)](#requirements)
+[![Version 0.3.0](https://img.shields.io/badge/version-0.3.0-d4d7dd)](pyproject.toml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-8b9099)](pyproject.toml)
 [![Benchmark: 11/11](https://img.shields.io/badge/benchmark-11%2F11%20tasks-a9c4a4)](#benchmark)
 
@@ -16,6 +19,9 @@ Type a task. glimpse does it in your apps, on your screen, and checks the result
 
 ## Introduction
 
+glimpse is a **harness**: the system around fixed models that lets them act as an agent on your desktop. It gives
+the models their tools, their memory, their checks and their skills, and it improves itself after each task.
+
 glimpse operates real apps: LibreOffice, Text Editor, Files, the web browser, Telegram and other desktop apps.
 It uses the mouse, the keyboard and the accessibility tree of each app, as a person does.
 
@@ -24,7 +30,7 @@ Two models do the work:
 - A **planner** writes the plan. You can use any OpenAI-compatible model that reads images and returns JSON.
 - **Jev** (TypeSafe System One) finds each control, checks each result, and decides when the task is done.
 
-glimpse learns from each task. When you give a similar task again, it is faster.
+glimpse learns from each task. When you give a similar task again, it is faster. To see how much faster, type `/learning`.
 
 ## Download and install
 
@@ -164,6 +170,9 @@ To give glimpse a time budget, put the time in the task, for example "for 3 hour
 While glimpse works:
 
 - A soft grey light glows around the edges of the screen. Type `/glow off` to turn it off.
+- Notifications show in the top-right corner of the screen.
+- If you use the keyboard or the touchpad, glimpse pauses for 10 seconds after your last input. Then it looks at the screen again and continues. Type `continue` to continue sooner.
+- To give more instructions, type them in the glimpse terminal and push Enter. glimpse uses them from its next plan. Type `stop` to stop.
 - The pointer changes to the glimpse cursor ◐ and moves smoothly to each target before it clicks. Your cursor comes back when the task stops.
 
 Options:
@@ -223,6 +232,15 @@ After each task, glimpse shows what it learned:
 | Learnability | 0 to 100: the task finished and passed its check, the steps were clean, there were few new plans, and a reusable workflow came from it |
 
 After a task passes its check, glimpse makes a reusable workflow from it ([Agent Workflow Memory](https://github.com/zorazrw/agent-workflow-memory)).
+
+When a task fails, repeats actions or is slow, glimpse improves the skill for that kind of task
+(Reflect, Revise, Reuse, from [EvoSkill-GUI](https://github.com/ZJU-REAL/EvoSkill-GUI)):
+
+1. **Reflect.** An isolated verifier examines the task, the action log and the result. It does not see the
+   planner's reasoning or the skill, so it cannot be persuaded. It gives the failure type, the first wrong step,
+   the root cause and changes to make.
+2. **Revise.** A maintainer edits the skill: the main steps, a backup route, and recover rules ("if X, then Y").
+3. **Reuse.** The next similar task gets the revised skill.
 Before a new task, Jev selects the best workflow and the best past task, and the planner gets them.
 If a past task was slow, glimpse gives only its workflow, not the slow steps.
 
@@ -307,7 +325,8 @@ Write the variable parts as `{NAME}`. Do not put examples in lessons, because th
 | `live/a11y_agent.py`, `live/cursor.py` | Accessibility tree, pointer movement, clicks and typing |
 | `live/changes.py` | Screen changes and loop detection |
 | `live/lo_dialog.py`, `live/gtk_dialog.py` | The save dialogs of LibreOffice and GNOME |
-| `live/memory.py` | Memory, learning, lessons, workflows and harness notes |
+| `live/memory.py`, `live/evolve.py` | Memory, learning, lessons, workflows, harness notes, and skill evolution |
+| `live/mascot.py`, `live/version.py` | The mascot and the version |
 | `live/takeover.py`, `live/glow.py`, `live/toast.py` | The stop key, the screen glow and the pop-up cards |
 | `live/teach.py` | Teaching by demonstration |
 | `bench/live_bench.py`, `bench/harness2.py` | The benchmark and Harness² |

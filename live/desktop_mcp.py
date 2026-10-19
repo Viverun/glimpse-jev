@@ -7,8 +7,6 @@ import threading
 import time
 from pathlib import Path
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
 
 
 PICTURES = Path.home() / "Pictures"
@@ -38,12 +36,15 @@ class DesktopMCP:
         threading.Thread(target=self._loop.run_forever, daemon=True).start()
         self._ready = threading.Event()
         self._stop = None
+        from mcp import StdioServerParameters  # loaded on first use: it takes ~0.6 s to import
         asyncio.run_coroutine_threadsafe(self._serve(StdioServerParameters(command=command, args=list(args))), self._loop)
         if not self._ready.wait(30):
             raise RuntimeError("computer-use-linux MCP did not start")
 
     async def _serve(self, params):
         self._stop = asyncio.Event()
+        from mcp import ClientSession
+        from mcp.client.stdio import stdio_client
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()

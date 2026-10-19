@@ -1,4 +1,4 @@
-"""jev's own pop-ups: small see-through cards in the bottom-left corner, instead of GNOME notifications.
+"""glimpse's own pop-ups: small see-through cards in the top-right corner, instead of GNOME notifications.
 
 GNOME Wayland has no layer-shell, so the cards are override-redirect GTK3 windows on XWayland: they can
 sit at exact screen coordinates, stay on top, ignore clicks and be translucent. A tiny daemon (system
@@ -126,12 +126,11 @@ def daemon() -> None:
 
     def place():
         mon = Gdk.Display.get_default().get_primary_monitor() or Gdk.Display.get_default().get_monitor(0)
-        geo = mon.get_geometry()
-        y = geo.y + geo.height - MARGIN
-        for c in cards:  # newest at the bottom, older ones pushed up
-            y -= c.card_h
-            c.move(geo.x + MARGIN, y)
-            y -= GAP
+        geo = mon.get_workarea()  # below GNOME's top bar
+        y = geo.y + MARGIN
+        for c in cards:  # top-right corner: newest on top, older ones pushed down
+            c.move(geo.x + geo.width - WIDTH - MARGIN, y)
+            y += c.card_h + GAP
 
     def add(msg):
         c = Card(msg.get("title", ""), msg.get("body", ""), msg.get("state", "jev"))

@@ -7,7 +7,6 @@ Works in ~/glimse-demo/teach. Hands off the desktop while it runs (touching inpu
 """
 
 import csv
-import json
 import re
 import sys
 import time

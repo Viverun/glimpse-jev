@@ -317,6 +317,20 @@ def add_workflow(wf: dict) -> bool:
     return True
 
 
+def save_package(old_name: str, pkg: dict) -> dict:
+    """Replace the workflow named old_name (or add a new one) with a revised skill package; keeps a history of
+    failures (the newest 8)."""
+    wfs = load_workflows()
+    prev = next((w for w in wfs if old_name and w.get("name") == old_name), None)
+    failures = ((prev or {}).get("failures") or []) + ([pkg.pop("failure")] if pkg.get("failure") else [])
+    pkg = {**(prev or {}), **pkg, "failures": failures[-8:], "revisions": ((prev or {}).get("revisions") or 0) + 1,
+           "time": time.strftime("%Y-%m-%d %H:%M")}
+    wfs = [w for w in wfs if w is not prev] + [pkg]
+    DIR.mkdir(parents=True, exist_ok=True)
+    WORKFLOWS.write_text(json.dumps(wfs[-200:], indent=1))
+    return pkg
+
+
 def induce_workflow(luna_json, task: str, steps: list[dict], app_id: str | None) -> dict | None:
     """After a verified run: abstract its steps into a workflow with variables (one planner call)."""
     if len([s for s in steps if s.get("do") not in ("wait", "shell")]) < 2:
@@ -368,7 +382,10 @@ def workflows_for(jev, task: str) -> str:
     LAST_WORKFLOW = w["name"]
     return (f"A reusable workflow for this kind of task (from earlier verified runs; fill in the {{variables}} with "
             f"this task's values, skip steps that don't apply): {w['name']}\n"
-            f"variables: {json.dumps(w.get('variables') or {})}\nsteps: {json.dumps(w['steps'])}")
+            f"variables: {json.dumps(w.get('variables') or {})}\nsteps: {json.dumps(w['steps'])}"
+            + (f"\nbackup route if the main one is blocked: {w['backup']}" if w.get("backup") else "")
+            + ("\nrecover rules (learned from earlier failures):\n" + "\n".join(f"- {r}" for r in w["recover"]) if w.get("recover") else "")
+            + ("\nfailures seen before (avoid): " + "; ".join(w["failures"][-3:]) if w.get("failures") else ""))
 
 
 # --- deep desktop knowledge ---------------------------------------------------------------------
@@ -388,6 +405,16 @@ def _out(cmd: list[str]) -> str:
         return ""
 
 
+def _screen() -> str:
+    """This machine's monitors, e.g. "2880x1620 at 2x scale (1440x810 logical)" (GTK in the system python)."""
+    code = ("import gi; gi.require_version('Gdk','3.0'); from gi.repository import Gdk; d=Gdk.Display.get_default(); "
+            "print('; '.join(f'{(m:=d.get_monitor(i)).get_geometry().width*m.get_scale_factor()}x{m.get_geometry().height*m.get_scale_factor()} '"
+            "f'at {m.get_scale_factor()}x scale ({m.get_geometry().width}x{m.get_geometry().height} logical)' for i in range(d.get_n_monitors())))")
+    import os
+    out = _out(["env", "GDK_BACKEND=x11", "/usr/bin/python3", "-c", code]) if os.path.exists("/usr/bin/python3") else ""
+    return out.strip() or "unknown"
+
+
 def scan_desktop() -> dict:
     """GNOME facts that help operate this desktop."""
     facts = {"gnome": _out(["gnome-shell", "--version"])}
@@ -403,7 +430,7 @@ def scan_desktop() -> dict:
         if g("binding"):
             shortcuts.append(f"{g('binding')} -> {g('name')} ({g('command')})")
     facts["custom_shortcuts"] = shortcuts[:20]
-    facts["screen"] = "2880x1620 panel at 2x scale (1440x810 logical)"
+    facts["screen"] = _screen()
     return facts
 
 
@@ -672,7 +699,6 @@ def learn_habits() -> dict:
     # 1) Recently used files: which app opens which file types, busiest folders.
     try:
         root = ET.parse(home / ".local/share/recently-used.xbel").getroot()
-        ns = {"bookmark": "http://www.freedesktop.org/standards/desktop-bookmarks"}
         by_ext, folders = collections.defaultdict(collections.Counter), collections.Counter()
         for b in root.findall("bookmark"):
             path = urllib.parse.unquote(urllib.parse.urlparse(b.get("href", "")).path)

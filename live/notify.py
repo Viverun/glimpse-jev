@@ -1,4 +1,4 @@
-"""Pop-ups for jev runs: translucent cards in the bottom-left corner (see toast.py), not GNOME notifications.
+"""Pop-ups for glimpse runs: translucent cards in the top-right corner (see toast.py), not GNOME notifications.
 
 The title says what happened; the body carries the information.
 """

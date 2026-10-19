@@ -815,3 +815,47 @@ def test_similar_tasks_compare_within_their_category(mem):
 
 def test_repeated_click_between_other_moves_is_a_loop():
     assert changes.looping(["click › Archived chats", "go to › x", "click › Archived chats", "focus › y", "click › Archived chats"])
+
+
+def test_your_input_pauses_then_glimpse_looks_again(monkeypatch):
+    t = takeover.Takeover()
+    assert t.paused_for() == 0
+    t.last_input = time.monotonic()
+    assert 9 < t.paused_for() <= takeover.PAUSE_SECONDS
+    t.resume()
+    assert t.paused_for() == 0
+    a = make_agent([])
+    clock = {"t": 100.0}
+    monkeypatch.setattr(ja.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+    monkeypatch.setattr(takeover.time, "monotonic", lambda: clock["t"])
+    a.you = t
+    t.last_input = 100.0
+    with pytest.raises(ja.UserPaused):
+        a.act({"type": "key", "key": "enter", "label": "x"})
+    assert clock["t"] >= 100.0 + takeover.PAUSE_SECONDS     # it waited out the pause, then asked to look again
+
+
+def test_pause_replans_without_counting_a_failure():
+    plans = [{"status": "working", "steps": [{"do": "key", "key": "a"}, {"do": "key", "key": "b"}]},
+             {"status": "done", "report": "r", "steps": []}]
+    a = make_agent(plans)
+    a.step = lambda s, els, shot: (_ for _ in ()).throw(ja.UserPaused("you used the computer"))
+    r = a.run("t")
+    assert r["status"] == "done" and not a.failures
+
+
+def test_added_instructions_reach_the_planner():
+    a = make_agent([])
+    del a.plan  # the real planner call
+    a.extra = ["also save a copy as PDF"]
+    sent = {}
+
+    class Completions:
+        def create(self, **k):
+            sent.update(k)
+            msg = type("M", (), {"content": "{}"})()
+            usage = type("U", (), {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})()
+            return type("R", (), {"choices": [type("C", (), {"message": msg})()], "usage": usage})()
+    a.luna = type("L", (), {"chat": type("Chat", (), {"completions": Completions()})()})()
+    a.plan("t", [], [], None)
+    assert "also save a copy as PDF" in sent["messages"][1]["content"][0]["text"]

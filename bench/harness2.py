@@ -128,7 +128,7 @@ def evidence(name: str, base: dict) -> str:
 
 
 def propose(dim: str, name: str, base: dict) -> dict:
-    system = "\n\n".join([f"You improve jev, a computer-use agent on a live GNOME desktop, by editing its harness.",
+    system = "\n\n".join(["You improve jev, a computer-use agent on a live GNOME desktop, by editing its harness.",
                           DIMS[dim], HARNESS, GENERALIZE, KEEP_BASE, EVIDENCE_BOUNDARY, OUTPUT])
     try:
         return luna_json(system, evidence(name, base))

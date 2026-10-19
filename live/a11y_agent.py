@@ -16,15 +16,13 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-from openai import OpenAI
-from typesafe_sdk import Choice, Noul, TypeSafeClient
+from typesafe_sdk import Choice, Noul
 
 sys.path.insert(0, str(Path(__file__).parent))
 from desktop_mcp import DesktopMCP  # noqa: E402
 
 LUNA_ENDPOINT = __import__("config").setting("planner_base_url")
 LUNA_DEPLOYMENT = __import__("config").setting("planner_model")
-CLICK_SCALE = 4 / 3  # AT-SPI bounds are in GNOME logical px (1440 wide); MCP click takes 1920-wide coordinates
 STOP_FILE = Path.home() / "glimse-demo" / "STOP"
 FAST_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \n\t`~!@#$%^&*()-_=+[]{}\\|;:'\",.<>/?")
 YDOTOOL_ENV = {**os.environ, "YDOTOOL_SOCKET": f"/run/user/{os.getuid()}/.ydotool_socket"}
@@ -135,7 +133,7 @@ class Desktop:
         """
         b = element["abs"]
         cx, cy = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
-        x, y = round(cx * CLICK_SCALE), round(cy * CLICK_SCALE)
+        x, y = round(cx), round(cy)
         __import__("cursor").glide(cx, cy)  # the pointer goes there first; an accessibility action fires as it arrives
         names = [a.get("name", "").lower() for a in element.get("actions") or []]
         primary = next((i for i, n in enumerate(names) if n in ("click", "press", "activate", "toggle", "jump", "open")), None)
@@ -256,6 +254,7 @@ class Agent:
     def __init__(self, desktop: Desktop, use_screenshots: bool = False, max_luna_calls: int = 25):
         self.d, self.use_screenshots, self.max_luna_calls = desktop, use_screenshots, max_luna_calls
         self.jev = __import__('config').jev_client()
+        from openai import OpenAI  # loaded on first use: it takes ~0.6 s to import
         self.luna = OpenAI(base_url=LUNA_ENDPOINT, api_key=__import__("config").setting("planner_api_key"))
         self.timer = Timer()
         self.task_window: dict | None = None

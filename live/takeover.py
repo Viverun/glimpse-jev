@@ -3,9 +3,10 @@
 Reads the physical keyboards (/dev/input/event*, readable by the `input` group) in a background thread.
 jev's own input never shows up there: ydotool types through its own virtual device ("ydotoold virtual
 device"), and computer-use-linux clicks through the desktop portal, which injects inside the compositor.
-Mouse and touchpad are ignored, so you can use them freely while jev works. When the stop combination
-(default Ctrl+Alt+Esc; set JEV_STOP_KEYS or `/stopkey`) is held, the main thread gets SIGINT, so even a
-long planner call is interrupted, and any modifier keys jev was holding are released.
+It also reads the mouse and touchpad. Any key press or pointer movement of yours pauses glimpse for
+PAUSE_SECONDS after your last input (or until you type `continue`), so you and glimpse never fight over the
+pointer. When the stop combination (default Ctrl+Alt+Esc; set JEV_STOP_KEYS or `/stopkey`) is held, the main
+thread gets SIGINT, so even a long planner call is interrupted, and any modifier keys glimpse held are released.
 """
 
 import os
@@ -19,7 +20,8 @@ import time
 from pathlib import Path
 
 EVENT = struct.Struct("llHHi")  # struct input_event on 64-bit Linux: timeval, type, code, value
-EV_KEY = 1
+EV_KEY, EV_REL, EV_ABS = 1, 2, 3
+PAUSE_SECONDS = 10  # you used the keyboard or touchpad: glimpse waits this long after your last input
 DEFAULT_STOP = "ctrl+alt+esc"
 SKIP = re.compile(r"ydotool|virtual|power button|lid switch|video bus|camera|lens cover|sof-hda|hdmi|headphone|mic", re.I)
 MODIFIERS = (29, 97, 42, 54, 56, 100, 125, 126)  # ctrl, shift, alt, super (left and right)
@@ -92,6 +94,8 @@ class Takeover:
             self.combo = parse_combo(DEFAULT_STOP)
         self.grace = grace  # ignore input right after arming
         self.reason = ""
+        self.last_input = 0.0  # monotonic time of your latest key press or pointer movement
+        self._pointer_fds: set[int] = set()
         self._stop = threading.Event()
         self._fds: dict[int, str] = {}
 
@@ -99,12 +103,13 @@ class Takeover:
         if os.environ.get("JEV_NO_TAKEOVER"):
             return self
         for name, path in physical_devices():
-            if "touchpad" in name.lower() or "mouse" in name.lower():
-                continue  # pointers never stop a run
             try:
-                self._fds[os.open(path, os.O_RDONLY | os.O_NONBLOCK)] = name
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
             except OSError:
-                pass
+                continue
+            self._fds[fd] = name
+            if "touchpad" in name.lower() or "mouse" in name.lower():
+                self._pointer_fds.add(fd)  # pointers pause a run, they never stop it
         if self._fds:
             self._t0 = time.monotonic()
             threading.Thread(target=self._watch, daemon=True).start()
@@ -126,12 +131,21 @@ class Takeover:
         if self.reason:
             release_modifiers()
 
+    def paused_for(self) -> float:
+        """Seconds glimpse should still wait because you are using the computer (0 when it may act)."""
+        return max(0.0, self.last_input + PAUSE_SECONDS - time.monotonic()) if self.last_input else 0.0
+
+    def resume(self) -> None:
+        """You said continue: act again now."""
+        self.last_input = 0.0
+
     @property
     def watching(self) -> list[str]:
         return list(self._fds.values())
 
     def _watch(self) -> None:
         held: set[int] = set()
+        motion: dict[int, int] = {}
         while not self._stop.is_set():
             try:
                 ready, _, _ = select.select(list(self._fds), [], [], 0.25)
@@ -142,10 +156,19 @@ class Takeover:
                     data = os.read(fd, EVENT.size * 64)
                 except OSError:
                     continue
+                if time.monotonic() - self._t0 < self.grace:
+                    continue
                 for off in range(0, len(data) - EVENT.size + 1, EVENT.size):
                     _, _, typ, code, value = EVENT.unpack_from(data, off)
+                    if typ in (EV_REL, EV_ABS):  # the pointer moved: a few events, not one stray one
+                        motion[fd] = motion.get(fd, 0) + 1
+                        if motion[fd] >= 3:
+                            self.last_input, motion[fd] = time.monotonic(), 0
+                        continue
                     if typ != EV_KEY or value == 2:  # auto-repeat changes nothing
                         continue
+                    if value == 1:
+                        self.last_input = time.monotonic()
                     held.add(code) if value else held.discard(code)
                     if time.monotonic() - self._t0 >= self.grace and all(held & set(codes) for codes in self.combo):
                         if self._stop.is_set():  # disarmed meanwhile: the run already ended

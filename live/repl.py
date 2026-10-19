@@ -7,7 +7,6 @@ Enter sends; Alt+Enter (or Ctrl+J) inserts a newline, and pasted multi-line text
 import os
 import re
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -17,7 +16,6 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
-from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -435,7 +433,7 @@ class Repl:
 
     def cmd_popups(self, rest):
         if rest == "test":
-            notify.send("glimpse pop-up test", "A translucent card in the bottom-left corner.", state="done")
+            notify.send("glimpse pop-up test", "A translucent card in the top-right corner.", state="done")
             return
         if rest in ("on", "off"):
             self.args.quiet = self.quiet = rest == "off"

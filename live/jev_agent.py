@@ -15,7 +15,7 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from typesafe_sdk import Choice, Image, Noul, TypeSafeClient
+from typesafe_sdk import Choice, Image, Noul
 
 from a11y_agent import STOP_FILE, Desktop, describe, is_terminal
 from gtk_dialog import GtkFileDialog
@@ -74,6 +74,10 @@ class BlockedApp(Exception):
     pass
 
 
+class UserPaused(Exception):
+    """You used the computer while glimpse worked: it waited, and now looks at the screen again before acting."""
+
+
 class JevAgent:
     def __init__(self, desktop: Desktop, max_steps: int = 40, debug_dir: Path | None = None, done_threshold: float = 0.8,
                  exclude_window_ids: set[int] | None = None, blocked_words: tuple[str, ...] = ("whatsapp",),
@@ -88,6 +92,7 @@ class JevAgent:
         self.jev = __import__('config').jev_client(headers={"TypeSafe-Danger-Zone-Images": "true"}, timeout=30)
         self.ms, self.calls = defaultdict(float), defaultdict(int)
         self.task_window: dict | None = None
+        self.extra: list[str] = []  # instructions you add while the task runs
         self.gtk = GtkFileDialog(desktop.mcp, self.jev)
         if debug_dir:
             debug_dir.mkdir(parents=True, exist_ok=True)
@@ -111,6 +116,11 @@ class JevAgent:
         After keys or typing in the same window, the element list is reused and only the screenshot
         is refreshed: positions don't move without a window change, and Jev sees content changes on the image.
         """
+        you = getattr(self, "you", None)
+        while you is not None and you.paused_for() > 0:  # never pull a window to the front under your hands
+            if STOP_FILE.exists():
+                raise KeyboardInterrupt(f"{STOP_FILE} exists")
+            time.sleep(0.2)
         wins = self._t("windows", self.d.windows)
         focused = next((w for w in wins if w.get("focused")), None)
         # Follow focus to new windows of the task app (dialogs); never to terminals or other apps.
@@ -230,6 +240,14 @@ class JevAgent:
     def act(self, c: dict) -> str:
         if STOP_FILE.exists():
             raise KeyboardInterrupt(f"{STOP_FILE} exists")
+        you = getattr(self, "you", None)
+        if you is not None and you.paused_for() > 0:
+            # You are using the keyboard or touchpad: never act under your hands. Wait, then look again.
+            while you.paused_for() > 0:
+                if STOP_FILE.exists():
+                    raise KeyboardInterrupt(f"{STOP_FILE} exists")
+                time.sleep(0.2)
+            raise UserPaused("you used the computer: glimpse waited and now looks at the screen again")
         if self.task_window and not self.usable(self.task_window):
             raise BlockedApp(f"refusing to act in {self.task_window.get('title')!r}")
         if c["type"] == "click":

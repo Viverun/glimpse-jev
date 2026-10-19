@@ -19,12 +19,10 @@ import sys
 import time
 from pathlib import Path
 
-from rich.align import Align
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
-from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -37,7 +35,7 @@ import notify  # noqa: E402
 import sessions  # noqa: E402
 import config  # noqa: E402
 import takeover  # noqa: E402
-from jev_agent import BlockedApp, JevAgent, text_spans  # noqa: E402
+from jev_agent import BlockedApp, JevAgent  # noqa: E402
 from livevm import flat_pointer  # noqa: E402
 from takeover import Takeover  # noqa: E402
 import glow  # noqa: E402
@@ -149,8 +147,8 @@ class Working:
     """The live view of a running task: the step table plus an animated status line (like Claude Code's).
     Rendered on every refresh, so the glyph turns and the word shimmers even while glimpse waits on a model."""
 
-    def __init__(self, rows: list[dict], t0: float):
-        self.rows, self.t0, self.status = rows, t0, "running"
+    def __init__(self, rows: list[dict], t0: float, you=None):
+        self.rows, self.t0, self.status, self.you = rows, t0, "running", you
 
     def line(self) -> Text:
         now = time.monotonic()
@@ -163,6 +161,14 @@ class Working:
             out.append(ch, style=SHIMMER[(i - int(now * 14)) % len(SHIMMER)])
         secs = f"{t / 60:.0f} min {t % 60:.0f} s" if t >= 60 else f"{t:.0f} s"
         out.append(f"   {secs}  ·  {takeover.stop_combo()} to stop", style=FAINT)
+        left = self.you.paused_for() if self.you is not None and self.status == "running" else 0
+        if left > 0:
+            out = Text("  ")
+            out.append("‖ ", style=f"bold {WARN}")
+            out.append(f"paused {left:.0f} s", style=f"bold {WARN}")
+            out.append("  ·  you are using the computer  ·  type an instruction, or continue", style=MUTED)
+        else:
+            out.append("  ·  type to add an instruction", style=FAINT)
         return out
 
     def __rich__(self):
@@ -219,7 +225,9 @@ def pick_window(agent: JevAgent, desktop: Desktop, prompt: str, own_id: int | No
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="glimpse", description="Computer use on the live desktop, driven by Jev.")
+    from version import version
+    ap = argparse.ArgumentParser(prog="glimpse", description="glimpse: a computer-use harness for the Linux desktop.")
+    ap.add_argument("-V", "--version", action="version", version=f"glimpse {version()}")
     ap.add_argument("prompt", nargs="?", help="what to do; put text to type in quotes (omit for interactive mode)")
     ap.add_argument("--window", help="title substring of the window to work in")
     ap.add_argument("--max-steps", type=int, default=300)
@@ -266,13 +274,24 @@ def main() -> None:
 
 
 def welcome(session: dict):
+    import mascot
+    from version import version
+    home = str(Path.home())
+    cwd = os.getcwd().replace(home, "~", 1)
+    info = [Text.assemble(("glimpse", f"bold {ACCENT}"), (f" v{version()}", MUTED)),
+            Text(f"{config.setting('planner_model')} plans · Jev acts", style=MUTED),
+            Text(cwd, style=MUTED), Text("")]
+    head = Table.grid(padding=(0, 2))
+    head.add_column()
+    head.add_column()
+    for face, line in zip(mascot.text(), info):
+        head.add_row(face, line)
     keys = Table.grid(padding=(0, 3))
     for _ in range(3):
         keys.add_column()
     hint = lambda k, v: Text.assemble((k, ACCENT), ("  " + v, MUTED))  # noqa: E731
     keys.add_row(hint("/help", "commands"), hint("alt+enter", "new line"), hint(takeover.stop_combo(), "stop a task"))
-    body = [Text(""), wordmark("computer use for your desktop"), Text(""),
-            Padding(Text("What should I do on your desktop?", style=f"bold {ACCENT}"), (0, 0, 0, 2)),
+    body = [Text(""), Padding(head, (0, 0, 0, 1)), Padding(Text("What should I do on your desktop?", style=f"bold {ACCENT}"), (0, 0, 0, 2)),
             Padding(keys, (1, 0, 0, 2))]
     if session["turns"]:
         n = len(session["turns"])
@@ -304,7 +323,6 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
         agent = JevAgent(desktop, **common) if args.jev_only else HybridAgent(
             desktop, apps=installed_apps(), max_minutes=args.max_minutes, timeboxed=bool(asked), **common)
 
-    proc = None
     target = None
     hybrid = isinstance(agent, HybridAgent)
     guess = app_in_prompt(args.prompt, installed_apps())
@@ -334,11 +352,12 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
         raise KeyboardInterrupt(f"watchdog: exceeded the {args.max_minutes:g}-minute budget")
     signal.signal(signal.SIGALRM, _overtime)
     signal.alarm(int(args.max_minutes * 60 + 120))
-    status = "running"
     # The stop hotkey (default Ctrl+Alt+Esc) stops jev from any window; the mouse and touchpad stay yours to use.
     halo = glow.start() if config.get("glow", True) else None  # grey edge glow while glimpse works
     view = Working(rows, time.monotonic())
     with flat_pointer(), Takeover() as you, Live(view, console=console, refresh_per_second=12, transient=False) as live:
+        view.you = agent.you = you
+        listener = Instructions(agent, you, live.console)
         def on_step(info):
             if info.get("kind") == "update":  # full text, kept above the live table as a log of Claude's turns
                 live.console.print(Text.assemble(("● ", f"bold {GOOD}"), (info["label"].split(" · ", 1)[0][2:] + "  ", f"bold {GOOD}"),
@@ -354,7 +373,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
             if app:
                 before = {w["window_id"] for w in desktop.windows()}
                 view.status = f"launching {app[0].title()}…"
-                proc = subprocess.Popen(["gtk-launch", app[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                subprocess.Popen(["gtk-launch", app[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                 for i in range(30):
                     time.sleep(0.5)
                     wins = desktop.windows()
@@ -398,6 +417,7 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
             result = {"status": "blocked", "error": str(e), "steps": len(rows), "timing": {}}
         except Exception as e:
             result = {"status": "error", "error": repr(e)[:200], "steps": len(rows), "timing": {}}
+        listener.stop()
         if result["status"] in ("stopped", "blocked", "error"):  # keep what happened, for debugging
             result.update(history=getattr(agent, "_history", [])[-60:], failures=getattr(agent, "failures", [])[-10:])
         view.status = "✔ done" if result["status"] == "done" else f"✘ {result['status']}"
@@ -428,8 +448,47 @@ def run_task(args, session: dict | None = None) -> tuple[dict, float] | None:
             app_id = f"{guess[1]}.desktop" if guess else (agent.task_window or {}).get("app_id")
             threading.Thread(target=memory.induce_workflow, args=(agent.luna_json, args.prompt, list(agent.ok_steps), app_id),
                              daemon=False).start()
+        # Reflect, revise, reuse: a run that failed, looped or was slow improves the skill for next time.
+        import threading
+        import evolve
+        threading.Thread(target=evolve.after_task, daemon=False, args=(
+            agent.luna_json, args.prompt, category, app_id, list(getattr(agent, "_history", [])), list(agent.failures),
+            result["status"], (result.get("verify_result") or ""), plans, bool(getattr(agent, "looped_once", False)))).start()
     result["prompt_tokens"] = getattr(agent, "last_prompt_tokens", 0)
     return result, secs
+
+
+class Instructions:
+    """While a task runs, read lines typed in glimpse's terminal: `continue` resumes after a pause, `stop` stops,
+    and any other text becomes an extra instruction the planner follows from its next round."""
+
+    def __init__(self, agent, you, out):
+        import threading
+        self.agent, self.you, self.out, self.done = agent, you, out, threading.Event()
+        if sys.stdin.isatty():
+            threading.Thread(target=self.read, daemon=True).start()
+
+    def read(self) -> None:
+        import select
+        while not self.done.is_set():
+            if not select.select([sys.stdin], [], [], 0.3)[0]:
+                continue
+            line = sys.stdin.readline().strip()
+            if self.done.is_set() or not line:
+                continue
+            low = line.lower().rstrip(".!")
+            if low in ("continue", "c", "go", "resume", "go on"):
+                self.you.resume()
+                self.out.print(Text.assemble(("  ▸ ", GOOD), ("continuing", MUTED)))
+            elif low in ("stop", "cancel", "abort"):
+                os.kill(os.getpid(), __import__("signal").SIGINT)
+            else:
+                self.agent.extra.append(line)
+                self.you.resume()
+                self.out.print(Text.assemble(("  + ", GOOD), ("added: ", MUTED), (line, ACCENT)))
+
+    def stop(self) -> None:
+        self.done.set()
 
 
 def learning_line(rep: dict) -> Text:

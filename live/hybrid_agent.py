@@ -15,14 +15,13 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from openai import OpenAI
 from typesafe_sdk import Box, Choice, Image, Noul
 
 import changes
 import memory
 from a11y_agent import STOP_FILE, describe
 from agent_output import read_reply
-from jev_agent import ACTIONABLE, BlockedApp, JevAgent
+from jev_agent import ACTIONABLE, BlockedApp, JevAgent, UserPaused
 from lo_dialog import LibreOfficeSave, is_libreoffice
 
 import config  # noqa: E402
@@ -258,13 +257,14 @@ def fetch_text(url: str, limit: int = 12000) -> str:
     return text[:limit]
 
 
-def luna_client() -> OpenAI:
+def luna_client():
+    from openai import OpenAI  # loaded on first use: it takes ~0.6 s to import
     if not LUNA_ENDPOINT:
         raise RuntimeError("no planner endpoint: run `glimpse setup`")
     return OpenAI(base_url=LUNA_ENDPOINT, api_key=config.setting("planner_api_key"), timeout=90, max_retries=1)
 
 
-def luna_json(system: str, text: str, client: OpenAI | None = None) -> dict:
+def luna_json(system: str, text: str, client=None) -> dict:
     """One short Luna call returning JSON (no screenshot), e.g. to induce a workflow after a run."""
     r = (client or luna_client()).with_options(timeout=40).chat.completions.create(
         model=LUNA_DEPLOYMENT, response_format={"type": "json_object"}, **LUNA_SPEED,
@@ -309,7 +309,8 @@ class HybridAgent(JevAgent):
         self.context = ""  # profile + recalled experience, set by the caller
         self.ok_steps: list[dict] = []
         self.failures: list[str] = []
-        self.task, self._prev_do, self._selected_in = "", None, set()
+        self.task, self._prev_do, self._selected_in, self.looped_once = "", None, set(), False
+        self.extra: list[str] = []  # instructions you add while the task runs
         # What changed: snapshots of freshly read trees, the one before the current step, the one Luna last saw.
         self._snap = self._base = self._plan_snap = None
         self._thumb = self._base_thumb = None
@@ -326,6 +327,9 @@ class HybridAgent(JevAgent):
                 f"\n\nFocused window: {(self.task_window or {}).get('title')}\nVisible elements:\n" +
                 "\n".join(f"- {describe(e)}" for e in els[:80]) +
                 "\n\nVisible text in the window (most recent last):\n" + ((getattr(self.d, "last_text", "") or "(none)")[-4000:]))
+        if self.extra:
+            text += ("\n\nTHE USER ADDED THESE INSTRUCTIONS WHILE YOU WORK (newest last; they refine or override the "
+                     "task):\n" + "\n".join(f"- {x}" for x in self.extra))
         if self._plan_snap is not None and self._snap is not None:
             text += "\n\nWhat changed since your previous plan:\n" + changes.describe_diff(changes.diff(self._plan_snap, self._snap))
         self._plan_snap = self._snap
@@ -422,9 +426,12 @@ class HybridAgent(JevAgent):
         sy = meta.get("coordinate_height", img.height) / meta.get("height", img.height)
         x, y = (b.left + b.right) / 2 * img.width * sx, (b.top + b.bottom) / 2 * img.height * sy
         wb = self.task_window.get("bounds") or {}
-        if wb:  # the real pointer glides there and clicks (window screenshot space -> GNOME logical px)
-            from a11y_agent import CLICK_SCALE
-            self._t("act", __import__("cursor").click, wb["x"] + x / CLICK_SCALE, wb["y"] + y / CLICK_SCALE)
+        w0, h0 = meta.get("width", img.width), meta.get("height", img.height)  # the screenshot before any padding
+        px, py = (b.left + b.right) / 2 * img.width, (b.top + b.bottom) / 2 * img.height
+        if wb and px <= w0 and py <= h0:
+            # The real pointer glides there and clicks. The screenshot is the window, so the box's position in it
+            # scales to the window's logical size: no screen-specific factor, any resolution or scaling works.
+            self._t("act", __import__("cursor").click, wb["x"] + px / w0 * wb["width"], wb["y"] + py / h0 * wb["height"])
         else:
             self._t("act", self.d.mcp.call, "click", x=round(x), y=round(y), relative=True, window_id=self.task_window["window_id"])
         return True
@@ -905,7 +912,7 @@ class HybridAgent(JevAgent):
                     continue
                 status = "stuck: 10 rounds in a row failed or repeated themselves"
                 break
-            failed, still, clicked_nothing = False, 0, False
+            failed, still, clicked_nothing, paused = False, 0, False, False
             for i, s in enumerate(plan["steps"]):
                 n += 1
                 if n > self.max_steps or time.perf_counter() > t_end:
@@ -917,6 +924,10 @@ class HybridAgent(JevAgent):
                     err = self.step(s, els, shot)
                 except (KeyboardInterrupt, BlockedApp):
                     raise
+                except UserPaused as e:  # not a failure: replan from what the screen shows now
+                    history.append(f"- [{e}; continue from the current screen]")
+                    paused = True
+                    break
                 except Exception as e:  # a malformed step or a tool hiccup must not end the run
                     err = f"{type(e).__name__}: {e!s:.150}"
                 nxt = plan["steps"][i + 1] if i + 1 < len(plan["steps"]) else None
@@ -974,6 +985,8 @@ class HybridAgent(JevAgent):
             # Steps that fetch information (read_page, shell output, a supervised agent's reply) must be read by
             # Luna before it can report: a report written in advance would answer without the content.
             reads = any(x.get("do") in ("read_page", "shell", "wait_until") for x in plan["steps"])
+            if paused:
+                continue  # the user worked on the screen: look again and plan from there
             if not failed and plan.get("final") and not self.timeboxed and not reads:
                 facts = [f for f in plan.get("done_when") or [] if isinstance(f, str)]
                 # Facts about files are checked on disk (exists, written during this run); the rest by Jev.
@@ -1000,6 +1013,7 @@ class HybridAgent(JevAgent):
                               "finishing. The goal may already be done: check the screen or verify it. Otherwise "
                               "stop repeating them and try a different approach.")
             looped = looped_now
+            self.looped_once = self.looped_once or bool(looped_now)
             failed_rounds = failed_rounds + 1 if failed else 0
             if not failed and progress:
                 self.on_event("progress", progress)  # a chunk of work finished cleanly
