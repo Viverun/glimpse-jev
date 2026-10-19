@@ -39,7 +39,8 @@ class DesktopMCP:
         from mcp import StdioServerParameters  # loaded on first use: it takes ~0.6 s to import
         import os
         # glimpse draws its own edge glow and cursor: computer-use-linux 0.7.12+ would add a second overlay.
-        env = {**os.environ, "COMPUTER_USE_LINUX_INDICATOR": "0"}
+        # Remember the "Allow remote interaction" grant across runs and reboots (GNOME asks once, then reuses it).
+        env = {**os.environ, "COMPUTER_USE_LINUX_INDICATOR": "0", "COMPUTER_USE_LINUX_PERSIST_REMOTE_DESKTOP": "1"}
         asyncio.run_coroutine_threadsafe(self._serve(StdioServerParameters(command=command, args=list(args), env=env)), self._loop)
         if not self._ready.wait(30):
             raise RuntimeError("computer-use-linux MCP did not start")

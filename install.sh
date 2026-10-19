@@ -85,6 +85,7 @@ UNIT
   mkdir -p "$HOME/.config/environment.d"
   printf '%s\n' '# glimpse: apps publish their controls to accessibility tools' \
     'GNOME_ACCESSIBILITY=1   # Firefox, Zen, LibreWolf' 'ACCESSIBILITY_ENABLED=1   # Chrome, Chromium, Brave, Edge' \
+    '# Remember the "Allow remote interaction" grant (GNOME asks once)' 'COMPUTER_USE_LINUX_PERSIST_REMOTE_DESKTOP=1' \
     > "$HOME/.config/environment.d/90-glimpse.conf"
   NEED_RELOGIN=1
 fi

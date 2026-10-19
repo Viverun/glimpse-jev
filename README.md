@@ -9,7 +9,7 @@ Type a task. glimpse does it in your apps, on your screen, checks the result, an
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-5c616a)](LICENSE.md)
 [![Platform: GNOME on Wayland](https://img.shields.io/badge/platform-GNOME%20on%20Wayland-8b9099)](#requirements)
-[![Version 0.3.7](https://img.shields.io/badge/version-0.3.7-d4d7dd)](pyproject.toml)
+[![Version 0.3.8](https://img.shields.io/badge/version-0.3.8-d4d7dd)](pyproject.toml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-8b9099)](pyproject.toml)
 [![Benchmark: 11/11](https://img.shields.io/badge/benchmark-11%2F11%20tasks-a9c4a4)](#benchmark)
 
@@ -157,6 +157,7 @@ Run `glimpse /doctor`. It examines each item below and gives the fix for each pr
 | Your user in the `input` group | The stop key and the pause read your keyboard and touchpad. | `sudo usermod -aG input $USER`, then log out and log in. |
 | Accessibility on | Apps publish their controls only when it is on. | `gsettings set org.gnome.desktop.interface toolkit-accessibility true` |
 | `GNOME_ACCESSIBILITY=1` and `ACCESSIBILITY_ENABLED=1` | Without them, web browsers do not publish the page content. Then glimpse can find web controls only on the screenshot. | The installer writes them in `~/.config/environment.d/90-glimpse.conf`. Log out and log in after the installation. |
+| The "Allow remote interaction" permission | GNOME asks before an app can send clicks and keys. | Push **Allow** one time. glimpse sets `COMPUTER_USE_LINUX_PERSIST_REMOTE_DESKTOP=1`, so GNOME remembers the permission. |
 | Browsers started after the setup | A browser that started before the setup does not publish its pages. | Close the browser and open it again one time. |
 
 glimpse operates these web browsers:
