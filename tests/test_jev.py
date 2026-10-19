@@ -991,3 +991,26 @@ def test_a_click_that_changes_nothing_stops_the_chunk():
     a.step = lambda s, els, shot: (ran.append(s["do"]), orig(s, els, shot))[1]
     a.run("t")
     assert ran == ["click"] and "no visible effect" in a.failures[0]  # ctrl+x never ran on nothing
+
+
+def test_setup_knows_when_remote_interaction_is_saved(tmp_path, monkeypatch):
+    import setup_wizard
+    monkeypatch.setattr(setup_wizard, "GRANT_DIR", tmp_path)
+    assert not setup_wizard.remote_grant_saved()
+    (tmp_path / "remote-desktop-keyboard.token").write_text("t")
+    assert setup_wizard.remote_grant_saved()
+    printed = []
+    con = type("C", (), {"print": lambda self, *a, **k: printed.append(a[0]), "input": lambda self, *a, **k: "y"})()
+    setup_wizard.grant_remote_interaction(con)
+    assert "already allowed" in printed[0]          # never asks again once saved
+
+
+def test_setup_skips_browser_restart_when_all_ready(monkeypatch):
+    import browsers
+    import setup_wizard
+    monkeypatch.setattr(browsers, "running", lambda: [("zen", 1, "firefox")])
+    monkeypatch.setattr(browsers, "process_ready", lambda pid, fam: True)
+    asked = []
+    con = type("C", (), {"print": lambda self, *a, **k: None, "input": lambda self, *a, **k: asked.append(1) or "y"})()
+    setup_wizard.restart_unready_browsers(con)
+    assert not asked

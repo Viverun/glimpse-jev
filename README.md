@@ -9,7 +9,7 @@ Type a task. glimpse does it in your apps, on your screen, checks the result, an
 
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-5c616a)](LICENSE.md)
 [![Platform: GNOME on Wayland](https://img.shields.io/badge/platform-GNOME%20on%20Wayland-8b9099)](#requirements)
-[![Version 0.3.9](https://img.shields.io/badge/version-0.3.9-d4d7dd)](pyproject.toml)
+[![Version 0.3.10](https://img.shields.io/badge/version-0.3.10-d4d7dd)](pyproject.toml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-8b9099)](pyproject.toml)
 [![Benchmark: 11/11](https://img.shields.io/badge/benchmark-11%2F11%20tasks-a9c4a4)](#benchmark)
 
@@ -40,11 +40,17 @@ Run this command in a terminal:
 curl -fsSL https://raw.githubusercontent.com/Viverun/glimpse-jev/main/install.sh | bash
 ```
 
-Then connect your models:
+At the end, the installer starts `glimpse setup`. You can also start it again at any time:
 
 ```sh
 glimpse setup
 ```
+
+Setup does these steps one time, so that they never stop a task later:
+
+1. It connects your planner and Jev, and tests them.
+2. It opens the GNOME "Allow Remote Interaction" dialog. Switch on **Allow Remote Interaction**, keep **Remember This Selection** on, and push **Share**. GNOME does not ask again.
+3. If a web browser was open before the setup, it restarts the browser so that glimpse can read the pages. Your tabs come back.
 
 The installer does these steps:
 

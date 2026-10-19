@@ -124,4 +124,9 @@ for c in computer-use-linux ydotool gtk-launch; do command -v "$c" >/dev/null ||
 [ -z "$missing" ] || note "Still missing:$missing"
 [ -z "${NEED_RELOGIN:-}" ] || note "Log out and log in again once: you were added to the 'input' group."
 
-say "Next: run  glimpse setup  to connect your planner endpoint and your TypeSafe (Jev) key."
+if [ -e /dev/tty ] && [ -z "${GLIMPSE_NO_SETUP:-}" ]; then
+  say "Running glimpse setup: connect your models, allow remote interaction once, and prepare your browsers"
+  "$BIN/glimpse" setup </dev/tty || note "Setup did not finish. Run  glimpse setup  again at any time."
+else
+  say "Next: run  glimpse setup  to connect your planner endpoint and your TypeSafe (Jev) key."
+fi

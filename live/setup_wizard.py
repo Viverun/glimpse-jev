@@ -3,6 +3,7 @@
 Settings go to ~/.config/jev/config.json (mode 600). Environment variables still win over the file.
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -104,7 +105,72 @@ def run(console) -> None:
     console.print("[green]✔ Jev works[/]" if not j_err else f"[red]✘ Jev: {j_err}[/]")
     config.save_settings({k: v for k, v in values.items() if v != config.DEFAULTS.get(k)})
     console.print(f"[dim]saved to {config.PATH} (only you can read it)[/]\n")
+    grant_remote_interaction(console)
+    restart_unready_browsers(console)
+    console.print()
     for name, ok, fix in desktop_checks():
         console.print(f"{'[green]✔' if ok else '[yellow]![/yellow][yellow]'} {name}[/]" + ("" if ok else f"  [dim]{fix}[/]"))
     if not (p_err or j_err):
         console.print('\nReady. Try: [bold]glimpse "open example.com in the browser and tell me the heading"[/]')
+
+
+GRANT_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "computer-use-linux"
+
+
+def remote_grant_saved() -> bool:
+    return any(GRANT_DIR.glob("remote-desktop-*.token"))
+
+
+def grant_remote_interaction(console) -> None:
+    """GNOME must ask once before an app may send keys ("Allow Remote Interaction"); no app can skip that.
+    Ask it now, during setup, so the question never interrupts a task. glimpse then remembers the grant."""
+    if remote_grant_saved():
+        console.print("[green]✔ remote interaction already allowed[/]")
+        return
+    console.print("\n[bold]GNOME asks one time[/] before glimpse may send keys. In the dialog that opens now:\n"
+                  "  1. switch on [bold]Allow Remote Interaction[/]   2. keep [bold]Remember This Selection[/] on   3. push [bold]Share[/]")
+    if console.input("Open the dialog now? [dim][Y/n][/] ").strip().lower().startswith("n"):
+        return
+    try:
+        from desktop_mcp import DesktopMCP
+        m = DesktopMCP()
+        try:
+            w = next((w for w in m.call("list_windows").get("windows", []) if w.get("focused")), None)
+            m.call("press_key", key="shift", **({"window_id": w["window_id"]} if w else {}))  # harmless: opens the dialog
+        finally:
+            m.close()
+    except Exception as e:
+        console.print(f"[yellow]! could not open the dialog: {e!s:.120}[/]")
+    console.print("[green]✔ remote interaction allowed and remembered[/]" if remote_grant_saved()
+                  else "[yellow]! not saved yet: glimpse asks again on its first task[/]")
+
+
+def restart_unready_browsers(console) -> None:
+    """A browser that started before the setup shows glimpse no page content until it starts again with the
+    accessibility settings. Offer to restart it now (a normal close: it reopens its tabs), so no logout is needed."""
+    import signal
+    import time
+
+    import browsers
+    unready = [(n, pid, fam) for n, pid, fam in browsers.running() if not browsers.process_ready(pid, fam)]
+    if not unready:
+        return
+    names = ", ".join(n for n, _, _ in unready)
+    if console.input(f"\n{names} started before the setup, so glimpse cannot read its pages. Restart it now? "
+                     "Your tabs come back. [dim][Y/n][/] ").strip().lower().startswith("n"):
+        return
+    for name, pid, fam in unready:
+        try:
+            exe = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")[0].decode()  # the launcher, as you started it
+            if "/snap/" in exe:  # a Snap browser starts through /snap/bin, not its internal path
+                exe = f"/snap/bin/{Path(exe).name}"
+            os.kill(pid, signal.SIGTERM)  # a normal close: the browser saves its session
+            for _ in range(50):
+                if not Path(f"/proc/{pid}").exists():
+                    break
+                time.sleep(0.2)
+            cmd = [exe] + ([browsers.CHROMIUM_FLAG] if fam == "chromium" else [])
+            subprocess.Popen(cmd, env=browsers.env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            console.print(f"[green]✔ restarted {name}: glimpse can read its pages[/]")
+        except Exception as e:
+            console.print(f"[yellow]! could not restart {name}: {e!s:.100}. Close it and open it again.[/]")
